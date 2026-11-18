@@ -1,0 +1,610 @@
+// Command linssi is the camera for coding agents: one command or MCP call
+// returns one screenshot you can trust.
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+var version = "0.1.0" // set by the release build with -ldflags "-X main.version=..."
+
+const shortUsage = `Usage: linssi [flags] URL...    capture pages ("-" reads URLs from stdin)
+       linssi mcp [--connect PORT] serve the capture tool to coding agents
+       linssi browser              open a Chrome for logged-in captures
+Run 'linssi -h' for all flags and examples.
+`
+
+const help = `linssi — the camera for coding agents
+
+Usage:
+  linssi [flags] URL...        capture pages ("-" reads URLs from stdin)
+  linssi mcp [--connect PORT]  serve the capture tool over MCP stdio
+  linssi browser [--port N]    open a Chrome with its own profile for logged-in captures
+
+Examples:
+  linssi example.com                          1440×900 @2x → example.com.png
+  linssi --full --dark tailwindcss.com        full page, dark color scheme
+  linssi --selector '#hero' --padding 24 app.dev
+  linssi --connect 9222 localhost:3000/app    capture through 'linssi browser'
+  linssi --storage-state auth.json app.dev    cookies + localStorage from a file
+  linssi --full --max-pixels 1150000 app.dev  readable tiles sized for a model
+  cat urls.txt | linssi - -o shots/           concurrent batch
+
+Flags:
+  -o, --out PATH             output file (one URL) or directory (default: .)
+      --size SIZE            WxH[@Nx], or desktop (1440x900@2x), iphone (390x844@3x), ipad (1024x1366@2x)
+      --full                 capture the full page height
+      --selector CSS         capture the first element matching a CSS selector
+      --padding PX           padding around --selector, in CSS px
+      --dark                 emulate prefers-color-scheme: dark (default: light)
+      --format FMT           png, jpg or webp (an --out extension wins; default png)
+      --wait MS              extra delay after smart waiting
+      --wait-for CSS         wait until a selector exists
+      --scale N              device scale factor (overrides the size preset)
+      --max-pixels N         max output pixels per image; tall full pages split into tiles
+      --freeze               finish entrance animations; pause loops, videos and the caret
+      --hide CSS             hide matching elements (repeatable)
+      --mask CSS             cover matching elements with gray (repeatable)
+  -H, --header 'NAME: VALUE' extra request header (repeatable)
+      --storage-state FILE   cookies + localStorage (Playwright format or cookie array)
+      --connect TARGET       capture through a running Chrome: port, host:port or URL
+      --chrome PATH          browser binary (auto-detected; also $CHROME)
+      --jobs N               concurrent captures (default: min(4, URLs))
+      --timeout SECS         per-page budget (default: 30)
+      --json                 print one JSON object per finished capture
+      --version              print the version
+`
+
+// usageError is a mistake in how linssi was called; it exits 2.
+type usageError struct{ error }
+
+func usageErrorf(format string, args ...any) error { return usageError{fmt.Errorf(format, args...)} }
+
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ", ") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+type headerList map[string]string
+
+func (h headerList) String() string { return fmt.Sprint(map[string]string(h)) }
+func (h headerList) Set(v string) error {
+	name, value, ok := strings.Cut(v, ":")
+	name = strings.TrimSpace(name)
+	if !ok || name == "" || strings.ContainsAny(name, " \t") {
+		return fmt.Errorf("expected 'Name: value', got %q", v)
+	}
+	h[name] = strings.TrimSpace(value)
+	return nil
+}
+
+type cliArgs struct {
+	urls       []string
+	out        string
+	size       string
+	full       bool
+	selector   string
+	padding    int
+	dark       bool
+	format     string
+	wait       int
+	waitFor    string
+	scale      float64
+	jobs       int
+	timeout    int
+	chrome     string
+	connect    string
+	storage    string
+	headers    headerList
+	maxPixels  int64
+	freeze     bool
+	hide, mask stringList
+	json       bool
+	set        map[string]bool
+}
+
+func parseArgs(args []string, stderr io.Writer) (*cliArgs, error) {
+	a := &cliArgs{headers: headerList{}, set: map[string]bool{}}
+	fs := flag.NewFlagSet("linssi", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // errors are printed once, by main
+	fs.Usage = func() {}
+	fs.StringVar(&a.out, "o", "", "output file (one URL) or directory (batch)")
+	fs.StringVar(&a.out, "out", "", "same as -o")
+	fs.StringVar(&a.size, "size", "desktop", "WxH, or desktop (1440x900@2x), iphone (390x844@3x), ipad (1024x1366@2x)")
+	fs.BoolVar(&a.full, "full", false, "capture the full page height")
+	fs.StringVar(&a.selector, "selector", "", "capture the first element matching this CSS selector")
+	fs.IntVar(&a.padding, "padding", 0, "CSS-pixel padding around --selector")
+	fs.BoolVar(&a.dark, "dark", false, "emulate prefers-color-scheme: dark")
+	fs.StringVar(&a.format, "format", "", "png, jpg or webp (an --out extension wins) (default png)")
+	fs.IntVar(&a.wait, "wait", 0, "extra settle delay in ms after smart waiting")
+	fs.StringVar(&a.waitFor, "wait-for", "", "wait until this CSS selector exists")
+	fs.Float64Var(&a.scale, "scale", 0, "device scale factor (overrides the preset)")
+	fs.IntVar(&a.jobs, "jobs", 0, "concurrent captures (default min(4, URLs))")
+	fs.IntVar(&a.timeout, "timeout", 30, "per-page budget in seconds")
+	fs.StringVar(&a.chrome, "chrome", os.Getenv("CHROME"), "browser binary (auto-detected; also $CHROME)")
+	fs.StringVar(&a.connect, "connect", "", "attach to a running Chrome: port, host:port or URL")
+	fs.StringVar(&a.storage, "storage-state", "", "cookies + localStorage file (Playwright format or cookie array)")
+	fs.Var(a.headers, "H", "extra request header 'Name: value' (repeatable)")
+	fs.Var(a.headers, "header", "same as -H")
+	fs.Int64Var(&a.maxPixels, "max-pixels", 0, "max output pixels per image; tall full pages split into tiles")
+	fs.BoolVar(&a.freeze, "freeze", false, "finish entrance animations; pause loops, videos and the caret")
+	fs.Var(&a.hide, "hide", "hide elements matching a CSS selector (repeatable)")
+	fs.Var(&a.mask, "mask", "cover elements matching a CSS selector with gray (repeatable)")
+	fs.BoolVar(&a.json, "json", false, "print one JSON object per finished capture")
+	showVersion := fs.Bool("version", false, "print the version")
+
+	// Allow flags after URLs: parse, take one positional, repeat.
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, err
+			}
+			return nil, usageError{err}
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		a.urls = append(a.urls, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+	fs.Visit(func(f *flag.Flag) { a.set[f.Name] = true })
+	if *showVersion {
+		fmt.Println("linssi", version)
+		os.Exit(0)
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(a.out), "."))
+	singleURL := len(a.urls) == 1 && a.urls[0] != "-"
+	switch {
+	case len(a.urls) == 0:
+		return nil, usageError{errors.New("no URLs given")}
+	case a.full && a.selector != "":
+		return nil, usageErrorf("--selector conflicts with --full")
+	case a.set["padding"] && a.selector == "":
+		return nil, usageErrorf("--padding requires --selector")
+	case a.padding < 0:
+		return nil, usageErrorf("--padding must not be negative")
+	case a.connect != "" && (a.set["chrome"] || a.storage != ""):
+		return nil, usageErrorf("--connect uses that browser's own logins; it conflicts with --chrome and --storage-state")
+	case a.format != "" && formatFromExt(a.format) == "":
+		return nil, usageErrorf("unsupported --format %q: use png, jpg or webp", a.format)
+	case formatFromExt(ext) != "" && !singleURL:
+		return nil, usageErrorf("-o %s names one file; give a directory to capture several URLs", a.out)
+	case notAnImageExt[ext]:
+		return nil, usageErrorf("unsupported output extension .%s: use .png, .jpg or .webp", ext)
+	case a.timeout <= 0:
+		return nil, usageErrorf("--timeout must be greater than zero")
+	}
+	if _, err := ParseViewport(a.size, a.scale); err != nil {
+		return nil, usageError{err}
+	}
+	return a, nil
+}
+
+// notAnImageExt lists output extensions people try that linssi can't write;
+// any other extension is taken as part of a directory name.
+var notAnImageExt = map[string]bool{"gif": true, "bmp": true, "tif": true, "tiff": true, "svg": true, "pdf": true, "avif": true, "heic": true, "ico": true}
+
+func main() {
+	if len(os.Args) > 1 {
+		var err error
+		switch os.Args[1] {
+		case "mcp":
+			err = runMCP(os.Args[2:])
+		case "browser":
+			err = runBrowser(os.Args[2:])
+		default:
+			goto capture
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "linssi:", err)
+			os.Exit(1)
+		}
+		return
+	}
+capture:
+	if len(os.Args) == 1 {
+		fmt.Fprint(os.Stderr, shortUsage)
+		os.Exit(2)
+	}
+	a, err := parseArgs(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Print(help)
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "linssi: %v\nRun 'linssi -h' for help.\n", err)
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	failed, err := run(ctx, a)
+	interrupted := ctx.Err() != nil // read before stop(), which cancels ctx
+	stop()
+	switch {
+	case interrupted:
+		os.Exit(130) // interrupted; run already closed the browser and its profile
+	case errors.As(err, new(usageError)):
+		fmt.Fprintf(os.Stderr, "linssi: %v\nRun 'linssi -h' for help.\n", err)
+		os.Exit(2)
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "linssi:", err)
+		os.Exit(1)
+	case failed > 0:
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, a *cliArgs) (int, error) {
+	urls, err := collectURLs(a.urls, os.Stdin)
+	if err != nil {
+		return 0, err
+	}
+	vp, err := ParseViewport(a.size, a.scale)
+	if err != nil {
+		return 0, err
+	}
+	targets, format, err := resolveOutputs(urls, a.out, formatFromExt(a.format))
+	if err != nil {
+		return 0, err
+	}
+	opts := Options{
+		Viewport: vp, Mode: "viewport", Selector: a.selector, Padding: a.padding, Dark: a.dark,
+		Wait: time.Duration(a.wait) * time.Millisecond, WaitFor: a.waitFor,
+		Timeout: time.Duration(max(a.timeout, 1)) * time.Second, Format: format,
+		MaxPixels: a.maxPixels, Freeze: a.freeze, Hide: a.hide, Mask: a.mask, Headers: a.headers,
+	}
+	switch {
+	case a.selector != "":
+		opts.Mode = "element"
+	case a.full:
+		opts.Mode = "full_page"
+	}
+	if a.storage != "" {
+		if opts.Storage, err = LoadStorageState(a.storage); err != nil {
+			return 0, err
+		}
+	}
+
+	var cam *Camera
+	if a.connect != "" {
+		cam, err = Attach(a.connect)
+	} else {
+		cam, err = Launch(a.chrome)
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer cam.Close()
+
+	jobs := a.jobs
+	if jobs <= 0 {
+		jobs = min(4, len(targets))
+	}
+	var (
+		mu     sync.Mutex
+		failed int
+		wg     sync.WaitGroup
+		slots  = make(chan struct{}, jobs)
+	)
+	for _, t := range targets {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			var shot *Capture
+			err := t.err // a line that isn't a URL fails alone, not the batch
+			if err == nil {
+				shot, err = cam.Capture(ctx, t.url, opts)
+			}
+			if err == nil {
+				err = writeImages(t.path, shot.Images)
+			}
+			if ctx.Err() != nil {
+				return // interrupted: say nothing more
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failed++
+				if a.json {
+					printJSON(errorReport(t.url, t.path, opts, err))
+				} else {
+					fmt.Fprintf(os.Stderr, "✗ %s — %v\n", t.url, err)
+				}
+				return
+			}
+			if a.json {
+				printJSON(successReport(t.url, t.path, opts, shot))
+				return
+			}
+			name := t.path
+			if n := len(shot.Images); n > 1 {
+				// Name the files that were really written.
+				name = fmt.Sprintf("%s … %s (%d tiles)", tilePath(t.path, 1), filepath.Base(tilePath(t.path, n)), n)
+			}
+			fmt.Printf("✓ %s — %d×%d @%gx, %s\n", name, shot.CSSWidth, shot.CSSHeight,
+				round2(shot.Scale), humanSize(shot.Bytes()))
+			if final := shot.Page.FinalURL; final != "" && final != t.url {
+				fmt.Printf("  → ended at %s\n", final)
+			}
+			for _, w := range shot.Page.Warnings {
+				fmt.Fprintf(os.Stderr, "  ⚠ %s\n", w)
+			}
+		})
+	}
+	wg.Wait()
+	return failed, nil
+}
+
+// Report is the JSON shape of one capture, shared by the CLI and MCP.
+type Report struct {
+	Status    string   `json:"status"`
+	URL       string   `json:"url"`
+	Output    string   `json:"output,omitempty"`
+	Mode      string   `json:"mode"`
+	Selector  string   `json:"selector,omitempty"`
+	Padding   *int     `json:"padding,omitempty"`
+	CSSWidth  int      `json:"css_width,omitempty"`
+	CSSHeight int      `json:"css_height,omitempty"`
+	Scale     float64  `json:"scale,omitempty"`
+	Format    string   `json:"format,omitempty"`
+	Bytes     int      `json:"bytes,omitempty"`
+	Tiles     int      `json:"tiles,omitempty"`
+	Files     []string `json:"files,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	*PageInfo
+}
+
+func baseReport(status, u, out string, o Options) Report {
+	r := Report{Status: status, URL: u, Output: absPath(out), Mode: o.Mode}
+	if o.Mode == "element" {
+		r.Selector, r.Padding = o.Selector, ptr(o.Padding)
+	}
+	return r
+}
+
+func successReport(u, out string, o Options, c *Capture) Report {
+	r := baseReport("ok", u, out, o)
+	r.CSSWidth, r.CSSHeight, r.Scale = c.CSSWidth, c.CSSHeight, round2(c.Scale)
+	r.Format, r.Bytes, r.Tiles = extFor(o.Format), c.Bytes(), len(c.Images)
+	if out != "" && len(c.Images) > 1 {
+		for i := range c.Images {
+			r.Files = append(r.Files, absPath(tilePath(out, i+1)))
+		}
+	}
+	page := c.Page
+	r.PageInfo = &page
+	return r
+}
+
+func errorReport(u, out string, o Options, err error) Report {
+	r := baseReport("error", u, out, o)
+	r.Error = err.Error()
+	return r
+}
+
+func printJSON(v any) {
+	b, _ := json.Marshal(v)
+	fmt.Println(string(b))
+}
+
+// collectURLs reads the URL arguments and stdin lines. A line that isn't a
+// URL comes back with its error, so it fails alone instead of the batch.
+func collectURLs(args []string, stdin io.Reader) ([]target, error) {
+	var raw []string
+	for _, a := range args {
+		if a != "-" {
+			raw = append(raw, a)
+			continue
+		}
+		sc := bufio.NewScanner(stdin)
+		for sc.Scan() {
+			if line := strings.TrimSpace(sc.Text()); line != "" && !strings.HasPrefix(line, "#") {
+				raw = append(raw, line)
+			}
+		}
+		if err := sc.Err(); err != nil {
+			return nil, fmt.Errorf("reading URLs from stdin: %w", err)
+		}
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("no URLs given")
+	}
+	urls := make([]target, len(raw))
+	for i, r := range raw {
+		u, err := NormalizeURL(r)
+		if err != nil {
+			urls[i] = target{url: r, err: err}
+		} else {
+			urls[i] = target{url: u}
+		}
+	}
+	return urls, nil
+}
+
+type target struct {
+	url, path string
+	err       error
+}
+
+// resolveOutputs pairs URLs with files. One URL plus "--out file.ext" writes
+// that file and its extension sets the format; otherwise --out (default ".")
+// is a directory of names derived from each URL.
+func resolveOutputs(urls []target, out, flagFormat string) ([]target, string, error) {
+	if f := formatFromExt(filepath.Ext(out)); f != "" {
+		if len(urls) != 1 {
+			return nil, "", usageErrorf("-o %s names one file; give a directory to capture several URLs", out)
+		}
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return nil, "", err
+		}
+		urls[0].path = out
+		return urls, f, nil
+	}
+	format := flagFormat
+	if format == "" {
+		format = "png"
+	}
+	dir := out
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", err
+	}
+	seen := map[string]int{}
+	for i, t := range urls {
+		name := derivedName(t.url)
+		seen[name]++
+		// "_2", not "-2": tiles already use name-1, name-2, ...
+		if n := seen[name]; n > 1 {
+			name = fmt.Sprintf("%s_%d", name, n)
+		}
+		urls[i].path = filepath.Join(dir, name+"."+extFor(format))
+	}
+	return urls, format, nil
+}
+
+var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// derivedName turns https://example.com/pricing/ into example.com-pricing.
+func derivedName(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "page"
+	}
+	name := u.Hostname()
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(u.Path), filepath.Ext(u.Path))
+	} else if p := strings.Trim(u.Path, "/"); p != "" {
+		name += "-" + strings.ReplaceAll(p, "/", "-")
+	}
+	if name == "" {
+		name = "page"
+	}
+	return unsafeChars.ReplaceAllString(name, "-")
+}
+
+func formatFromExt(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "png":
+		return "png"
+	case "jpg", "jpeg":
+		return "jpeg"
+	case "webp":
+		return "webp"
+	}
+	return ""
+}
+
+func extFor(format string) string {
+	if format == "jpeg" {
+		return "jpg"
+	}
+	return format
+}
+
+func mimeFor(format string) string { return "image/" + format }
+
+// tilePath maps shots/home.png and tile 2 to shots/home-2.png.
+func tilePath(out string, i int) string {
+	ext := filepath.Ext(out)
+	return fmt.Sprintf("%s-%d%s", strings.TrimSuffix(out, ext), i, ext)
+}
+
+func writeImages(out string, images [][]byte) error {
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	if len(images) == 1 {
+		return os.WriteFile(out, images[0], 0o644)
+	}
+	for i, img := range images {
+		if err := os.WriteFile(tilePath(out, i+1), img, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func absPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
+}
+
+func round2(f float64) float64 { return float64(int(f*100+0.5)) / 100 }
+
+func humanSize(n int) string {
+	if n >= 1<<20 {
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	}
+	return fmt.Sprintf("%d KB", (n+1023)/1024)
+}
+
+// runBrowser opens a visible Chrome with a profile of its own and a DevTools
+// port, so people sign in to their apps once and agents capture through it.
+// Chrome 136+ refuses remote debugging on the default profile, which is why
+// "attach to the Chrome you already use" needs this separate profile.
+func runBrowser(args []string) error {
+	fs := flag.NewFlagSet("linssi browser", flag.ContinueOnError)
+	port := fs.Int("port", 9222, "DevTools port to listen on")
+	chrome := fs.String("chrome", os.Getenv("CHROME"), "browser binary (auto-detected; also $CHROME)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	next := fmt.Sprintf(`
+Sign in to your apps in that window once; the profile keeps the logins.
+Capture through it:       linssi --connect %[1]d localhost:3000/app
+Give it to Claude Code:   claude mcp add linssi -- linssi mcp --connect %[1]d
+`, *port)
+	if cam, err := Attach(strconv.Itoa(*port)); err == nil {
+		cam.Close()
+		fmt.Printf("A Chrome is already listening on port %d.\n%s", *port, next)
+		return nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	profile := filepath.Join(base, "linssi", "browser-profile")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		return err
+	}
+	path := *chrome
+	if path == "" {
+		path = findChrome()
+	}
+	if path == "" {
+		return errors.New("no Chrome, Chromium, Edge or Brave found; pass --chrome")
+	}
+	cmd := exec.Command(path, fmt.Sprintf("--remote-debugging-port=%d", *port), "--user-data-dir="+profile,
+		"--no-first-run", "--no-default-browser-check")
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting %s: %w", path, err)
+	}
+	fmt.Printf("Opened %s with the Linssi profile on port %d.\nProfile: %s\n%s", filepath.Base(path), *port, profile, next)
+	return nil
+}
