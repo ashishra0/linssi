@@ -1,0 +1,6 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Settings · Northwind</title></head>
+<body style="font:16px system-ui;padding:40px"><h1>Loading…</h1>
+<script>
+  // Demo of a signed-out visit: the app asks its API who the user is, then bounces to sign-in.
+  fetch('/demo/api/me').then(r => { if (!r.ok) location.replace('/demo/login/?next=/demo/settings/'); });
+</script></body></html>
