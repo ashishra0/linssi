@@ -81,7 +81,9 @@ go test ./...        # browser tests use the Chrome found on this machine
 go build .
 ```
 
-Releases: push a `v*` tag; `.github/workflows/release.yml` builds macOS, Linux and Windows binaries.
+Releases: push a `v*` tag; `.github/workflows/release.yml` builds macOS, Linux and Windows binaries, which `site/install.sh` (served at linssi.app/install) downloads.
+
+Website: `site/` is a static site, deployed to Cloudflare at linssi.app with `npx wrangler deploy`. `go run scripts/art.go` redraws the hero art, and `sh scripts/shots.sh` retakes every screenshot on the page with Linssi itself.
 
 ## Not in scope
 

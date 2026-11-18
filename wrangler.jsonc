@@ -1,0 +1,12 @@
+// Hosts the website (site/) on Cloudflare as static assets at linssi.app.
+// Deploy from the repo root:  npx wrangler deploy
+{
+  "name": "linssi",
+  "compatibility_date": "2026-11-17",
+  "observability": { "enabled": true },
+  "assets": { "directory": "site" },
+  "routes": [
+    { "pattern": "linssi.app", "custom_domain": true },
+    { "pattern": "www.linssi.app", "custom_domain": true }
+  ]
+}

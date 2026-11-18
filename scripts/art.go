@@ -2,7 +2,7 @@
 
 // Generates the site's stippled hero artwork. Run from the repo root:
 //
-//	go run site/art/main.go
+//	go run scripts/art.go
 //
 // It writes site/art/hero.png: a lighthouse at dusk on a headland, its amber
 // beam running level across the frame, ordered- and randomly dithered into

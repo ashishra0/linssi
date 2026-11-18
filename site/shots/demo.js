@@ -1,4 +1,4 @@
-// Written by site/shots.sh from real Linssi captures of the demo page.
+// Written by scripts/shots.sh from real Linssi captures of the demo page.
 window.LINSSI_DEMO = {
   "viewport": {
     "args": "--scale 1 localhost:3000/demo/billing/",

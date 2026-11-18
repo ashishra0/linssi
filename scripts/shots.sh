@@ -1,10 +1,10 @@
 #!/bin/sh
 # Retakes every screenshot the site shows, with Linssi itself, and writes the
-# demo's data (shots/demo.js). Run from the repo root after changing the site
-# or the demo pages:  sh site/shots.sh
+# demo's data (site/shots/demo.js). Run from the repo root after changing the
+# site or the demo pages:  sh scripts/shots.sh
 set -eu
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../site"
 bin=$(mktemp -d)/linssi
 (cd .. && go build -o "$bin" .)
 
@@ -39,7 +39,7 @@ for mode, (args, src, alt) in modes.items():
         "report": {k: r[k] for k in ("css_width", "css_height", "scale", "mode", "http_status", "elapsed_ms", "tiles")},
     }
 with open("shots/demo.js", "w") as f:
-    f.write("// Written by site/shots.sh from real Linssi captures of the demo page.\n")
+    f.write("// Written by scripts/shots.sh from real Linssi captures of the demo page.\n")
     f.write("window.LINSSI_DEMO = " + json.dumps(out, indent=2) + ";\n")
 PY
 rm shots/viewport.json shots/full.json shots/element.json
