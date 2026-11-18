@@ -1,6 +1,6 @@
 # linssi
 
-A camera for coding agents. One command or MCP call returns one screenshot you can trust: the real page, logged in, fully rendered, and sized so the model can read it.
+A camera for agents. One command or MCP call returns one screenshot you can trust: the real page, logged in, fully rendered, and sized so the model can read it.
 
 ```
 linssi example.com                          # 1440×900 @2x → example.com.png

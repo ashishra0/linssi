@@ -12,7 +12,7 @@ window.LINSSI_DEMO = {
       "scale": 1,
       "mode": "viewport",
       "http_status": 200,
-      "elapsed_ms": 909,
+      "elapsed_ms": 1080,
       "tiles": 1
     }
   },
@@ -28,7 +28,7 @@ window.LINSSI_DEMO = {
       "scale": 1,
       "mode": "full_page",
       "http_status": 200,
-      "elapsed_ms": 1241,
+      "elapsed_ms": 1206,
       "tiles": 1
     }
   },
@@ -44,7 +44,7 @@ window.LINSSI_DEMO = {
       "scale": 2,
       "mode": "element",
       "http_status": 200,
-      "elapsed_ms": 993,
+      "elapsed_ms": 884,
       "tiles": 1
     }
   }

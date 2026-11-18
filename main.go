@@ -1,4 +1,4 @@
-// Command linssi is the camera for coding agents: one command or MCP call
+// Command linssi is the camera for agents: one command or MCP call
 // returns one screenshot you can trust.
 package main
 
@@ -26,12 +26,12 @@ import (
 var version = "0.1.0" // set by the release build with -ldflags "-X main.version=..."
 
 const shortUsage = `Usage: linssi [flags] URL...    capture pages ("-" reads URLs from stdin)
-       linssi mcp [--connect PORT] serve the capture tool to coding agents
+       linssi mcp [--connect PORT] serve the capture tool to agents
        linssi browser              open a Chrome for logged-in captures
 Run 'linssi -h' for all flags and examples.
 `
 
-const help = `linssi — the camera for coding agents
+const help = `linssi — the camera for agents
 
 Usage:
   linssi [flags] URL...        capture pages ("-" reads URLs from stdin)

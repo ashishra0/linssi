@@ -19,7 +19,7 @@ import (
 // (~1.15 MP, ~1,600 tokens). Other clients have similar caps.
 const defaultMaxPixels = 1_150_000
 
-const instructions = "Linssi is a camera for coding agents. Call capture for one page or element at a time. " +
+const instructions = "Linssi is a camera for agents. Call capture for one page or element at a time. " +
 	"It returns the image inline (tall full pages come back as top-to-bottom tiles) and writes a file only when output is set. " +
 	"Read the warnings: a login redirect means pass storage_state or headers, or start the server with --connect."
 
