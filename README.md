@@ -19,7 +19,7 @@ cat urls.txt | linssi - -o shots/           # concurrent batch
 ```
 curl -fsSL https://linssi.app/install | sh
 # or
-go install github.com/ashishra0/linssi@latest
+go install github.com/ashishra0/linssi/cmd/linssi@latest
 ```
 
 Needs a Chrome-family browser (Chrome, Chromium, Edge or Brave). Nothing else.
@@ -77,8 +77,8 @@ The JSON report (`--json`) and every MCP result carry the final URL, HTTP status
 ## Develop
 
 ```
-go test ./...        # browser tests use the Chrome found on this machine
-go build .
+go test ./...          # browser tests use the Chrome found on this machine
+go build ./cmd/linssi
 ```
 
 Releases: push a `v*` tag; `.github/workflows/release.yml` builds macOS, Linux and Windows binaries, which `site/install.sh` (served at linssi.app/install) downloads.

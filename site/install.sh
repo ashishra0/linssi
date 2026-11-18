@@ -7,7 +7,7 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   arm64|aarch64) arch=arm64 ;;
   x86_64|amd64)  arch=amd64 ;;
-  *) echo "error: no prebuilt binary for $(uname -m); run: go install github.com/$REPO@latest" >&2; exit 1 ;;
+  *) echo "error: no prebuilt binary for $(uname -m); run: go install github.com/$REPO/cmd/linssi@latest" >&2; exit 1 ;;
 esac
 case "$os" in darwin|linux) ;; *) echo "error: unsupported OS $os" >&2; exit 1 ;; esac
 echo "downloading linssi ($os/$arch)…"

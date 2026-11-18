@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ashishra0/linssi"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -45,35 +46,36 @@ type CaptureInput struct {
 	StorageState     string            `json:"storage_state,omitempty" jsonschema:"path to a Playwright storage-state JSON or cookie array, for logged-in pages"`
 }
 
-func (in CaptureInput) prepare() (string, Options, error) {
-	u, err := NormalizeURL(in.URL)
+// Prepare validates the input and turns it into a URL and capture options.
+func (in CaptureInput) Prepare() (string, linssi.Options, error) {
+	u, err := linssi.NormalizeURL(in.URL)
 	if err != nil {
-		return "", Options{}, err
+		return "", linssi.Options{}, err
 	}
 	sel := strings.TrimSpace(in.Selector)
 	switch {
 	case in.Selector != "" && sel == "":
-		return "", Options{}, errors.New("selector must not be empty")
+		return "", linssi.Options{}, errors.New("selector must not be empty")
 	case in.FullPage && sel != "":
-		return "", Options{}, errors.New("selector conflicts with full_page")
+		return "", linssi.Options{}, errors.New("selector conflicts with full_page")
 	case in.Padding != nil && sel == "":
-		return "", Options{}, errors.New("padding requires selector")
+		return "", linssi.Options{}, errors.New("padding requires selector")
 	case in.Padding != nil && *in.Padding < 0:
-		return "", Options{}, errors.New("padding must not be negative")
+		return "", linssi.Options{}, errors.New("padding must not be negative")
 	case in.TimeoutSeconds < 0:
-		return "", Options{}, errors.New("timeout_seconds must be greater than zero")
+		return "", linssi.Options{}, errors.New("timeout_seconds must be greater than zero")
 	}
-	vp, err := ParseViewport(in.Size, in.Scale)
+	vp, err := linssi.ParseViewport(in.Size, in.Scale)
 	if err != nil {
-		return "", Options{}, err
+		return "", linssi.Options{}, err
 	}
 	format := formatFromExt(in.Format)
 	if in.Format != "" && format == "" {
-		return "", Options{}, fmt.Errorf("unsupported format %q", in.Format)
+		return "", linssi.Options{}, fmt.Errorf("unsupported format %q", in.Format)
 	}
 	if in.Output != "" {
 		if format = formatFromExt(strings.ToLower(in.Output[strings.LastIndex(in.Output, ".")+1:])); format == "" {
-			return "", Options{}, errors.New("output must end in .png, .jpg, .jpeg or .webp")
+			return "", linssi.Options{}, errors.New("output must end in .png, .jpg, .jpeg or .webp")
 		}
 	}
 	if format == "" {
@@ -87,7 +89,7 @@ func (in CaptureInput) prepare() (string, Options, error) {
 	if in.MaxPixels != nil {
 		maxPixels = *in.MaxPixels
 	}
-	o := Options{
+	o := linssi.Options{
 		Viewport: vp, Mode: "viewport", Dark: in.Dark, Format: format,
 		Wait: time.Duration(in.WaitMS) * time.Millisecond, WaitFor: strings.TrimSpace(in.WaitFor),
 		Timeout: time.Duration(timeout) * time.Second, MaxPixels: maxPixels,
@@ -103,23 +105,26 @@ func (in CaptureInput) prepare() (string, Options, error) {
 		o.Mode = "full_page"
 	}
 	if in.StorageState != "" {
-		if o.Storage, err = LoadStorageState(in.StorageState); err != nil {
-			return "", Options{}, err
+		if o.Storage, err = linssi.LoadStorageState(in.StorageState); err != nil {
+			return "", linssi.Options{}, err
 		}
 	}
 	return u, o, nil
 }
 
-// cameraPool keeps one warm browser for the server's lifetime and replaces it
+// Cameras keeps one warm browser for the server's lifetime and replaces it
 // if it dies. At most 4 captures run at once.
-type cameraPool struct {
+// Cameras keeps one warm browser for the MCP server's lifetime, replaces it
+// if it dies, and runs at most 4 captures at once. Extensions take captures
+// through Shoot.
+type Cameras struct {
 	chrome, connect string
 	mu              sync.Mutex
-	cam             *Camera
+	cam             *linssi.Camera
 	slots           chan struct{}
 }
 
-func (p *cameraPool) get() (*Camera, error) {
+func (p *Cameras) get() (*linssi.Camera, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.cam != nil && !p.cam.Alive() {
@@ -129,9 +134,9 @@ func (p *cameraPool) get() (*Camera, error) {
 	if p.cam == nil {
 		var err error
 		if p.connect != "" {
-			p.cam, err = Attach(p.connect)
+			p.cam, err = linssi.Attach(p.connect)
 		} else {
-			p.cam, err = Launch(p.chrome)
+			p.cam, err = linssi.Launch(p.chrome)
 		}
 		if err != nil {
 			return nil, err
@@ -140,7 +145,7 @@ func (p *cameraPool) get() (*Camera, error) {
 	return p.cam, nil
 }
 
-func (p *cameraPool) close() {
+func (p *Cameras) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.cam != nil {
@@ -149,30 +154,38 @@ func (p *cameraPool) close() {
 	}
 }
 
-func (p *cameraPool) capture(ctx context.Context, in CaptureInput) (*mcp.CallToolResult, any, error) {
-	u, o, err := in.prepare()
-	if err != nil {
-		return toolError(Report{Status: "error", URL: in.URL, Error: err.Error()}), nil, nil
-	}
+// Shoot captures url with o on the shared browser, waiting for a free slot.
+func (p *Cameras) Shoot(ctx context.Context, url string, o linssi.Options) (*linssi.Capture, error) {
 	select {
 	case p.slots <- struct{}{}:
 		defer func() { <-p.slots }()
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	}
 	cam, err := p.get()
 	if err != nil {
-		return toolError(errorReport(u, in.Output, o, err)), nil, nil
+		return nil, err
 	}
-	shot, err := cam.Capture(ctx, u, o)
+	return cam.Capture(ctx, url, o)
+}
+
+func (p *Cameras) capture(ctx context.Context, in CaptureInput) (*mcp.CallToolResult, any, error) {
+	u, o, err := in.Prepare()
+	if err != nil {
+		return toolError(Report{Status: "error", URL: in.URL, Error: err.Error()}), nil, nil
+	}
+	shot, err := p.Shoot(ctx, u, o)
+	if err != nil && ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
 	if err == nil && in.Output != "" {
-		err = writeImages(in.Output, shot.Images)
+		err = WriteImages(in.Output, shot.Images)
 	}
 	if err != nil {
-		return toolError(errorReport(u, in.Output, o, err)), nil, nil
+		return toolError(ErrorReport(u, in.Output, o, err)), nil, nil
 	}
 
-	report := successReport(u, in.Output, o, shot)
+	report := SuccessReport(u, in.Output, o, shot)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Captured %d×%d CSS px @%gx as %s", shot.CSSWidth, shot.CSSHeight, round2(shot.Scale), extFor(o.Format))
 	if n := len(shot.Images); n > 1 {
@@ -205,8 +218,8 @@ func toolError(r Report) *mcp.CallToolResult {
 	}
 }
 
-func newServer(pool *cameraPool) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "linssi", Version: version}, &mcp.ServerOptions{Instructions: instructions})
+func newServer(pool *Cameras, ext Extension) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: name, Version: Version}, &mcp.ServerOptions{Instructions: instructions})
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "capture",
 		Description: "Capture one trustworthy image of a live page or its first matching element. " +
@@ -216,10 +229,13 @@ func newServer(pool *cameraPool) *mcp.Server {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in CaptureInput) (*mcp.CallToolResult, any, error) {
 		return pool.capture(ctx, in)
 	})
+	if ext.Tools != nil {
+		ext.Tools(server, pool)
+	}
 	return server
 }
 
-func runMCP(args []string) error {
+func runMCP(args []string, ext Extension) error {
 	fs := flag.NewFlagSet("linssi mcp", flag.ContinueOnError)
 	chrome := fs.String("chrome", os.Getenv("CHROME"), "browser binary (auto-detected; also $CHROME)")
 	connect := fs.String("connect", "", "attach to a running Chrome (port, host:port or URL) so captures reuse its logins")
@@ -229,14 +245,14 @@ func runMCP(args []string) error {
 		}
 		return err
 	}
-	pool := &cameraPool{chrome: *chrome, connect: *connect, slots: make(chan struct{}, 4)}
+	pool := &Cameras{chrome: *chrome, connect: *connect, slots: make(chan struct{}, 4)}
 	defer pool.close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// On a signal, close the browser at once so in-flight captures fail fast
 	// instead of holding the shutdown until they finish.
 	context.AfterFunc(ctx, pool.close)
-	err := newServer(pool).Run(ctx, &mcp.StdioTransport{})
+	err := newServer(pool, ext).Run(ctx, &mcp.StdioTransport{})
 	if ctx.Err() != nil {
 		return nil // stopped by a signal
 	}

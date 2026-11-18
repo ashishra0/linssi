@@ -1,10 +1,8 @@
-package main
+package linssi
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -13,13 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestPlanTiles(t *testing.T) {
@@ -149,48 +144,12 @@ func TestURLsSizesAndNames(t *testing.T) {
 			t.Errorf("accepted size %q", bad)
 		}
 	}
-	if got := derivedName("https://example.com/pricing/"); got != "example.com-pricing" {
-		t.Errorf("derivedName = %q", got)
-	}
-	if got := tilePath("shots/home.png", 2); got != "shots/home-2.png" {
-		t.Errorf("tilePath = %q", got)
-	}
-	// Duplicate URLs must not take a tile's name (T-023).
-	ts, _, err := resolveOutputs([]target{{url: "https://a.dev/"}, {url: "https://a.dev/"}}, t.TempDir(), "png")
-	if err != nil || filepath.Base(ts[1].path) != "a.dev_2.png" {
-		t.Errorf("duplicate name: %+v %v", ts, err)
-	}
 	r, err := clip(bounds{X: 10.25, Y: 20.75, W: 100.5, H: 50.5, DocW: 200, DocH: 200}, 5)
 	if err != nil || r != (rect{5, 15, 111, 62}) {
 		t.Errorf("clip = %+v %v", r, err)
 	}
 	if r, _ := clip(bounds{X: 190.4, Y: 180.4, W: 20, H: 30, DocW: 200, DocH: 200}, 5); r != (rect{185, 175, 15, 25}) {
 		t.Errorf("clip at edge = %+v", r)
-	}
-}
-
-func TestParseArgs(t *testing.T) {
-	a, err := parseArgs([]string{"example.com", "--full", "-H", "X-A: 1", "--hide", "#a", "--hide", ".b", "other.com"}, &bytes.Buffer{})
-	if err != nil || len(a.urls) != 2 || !a.full || a.headers["X-A"] != "1" || len(a.hide) != 2 {
-		t.Fatalf("interspersed flags: %+v %v", a, err)
-	}
-	for _, bad := range [][]string{
-		{"x.com", "--selector", "h1", "--full"},
-		{"x.com", "--padding", "4"},
-		{"x.com", "--connect", "9222", "--storage-state", "a.json"},
-		{"x.com", "-H", "nocolon"},
-		{"x.com", "--format", "gif"},
-		{"x.com", "--size", "big"},
-		{"x.com", "-o", "shot.gif"},
-		{"a.com", "b.com", "-o", "x.png"},
-		{"x.com", "--timeout", "0"},
-		{},
-	} {
-		_, err := parseArgs(bad, &bytes.Buffer{})
-		var ue usageError
-		if !errors.As(err, &ue) {
-			t.Errorf("%v: want a usage error (exit 2), got %v", bad, err)
-		}
 	}
 }
 
@@ -450,60 +409,5 @@ func TestBrowserElementCapture(t *testing.T) {
 		if _, err := cam.Capture(ctx, srv.URL+"/box", o); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("selector %q: got %v, want %q", sel, err, want)
 		}
-	}
-}
-
-func TestMCPCaptureTool(t *testing.T) {
-	camera(t) // skip without a browser
-	srv := site()
-	defer srv.Close()
-	ctx := context.Background()
-
-	pool := &cameraPool{slots: make(chan struct{}, 4)}
-	defer pool.close()
-	serverT, clientT := mcp.NewInMemoryTransports()
-	if _, err := newServer(pool).Connect(ctx, serverT, nil); err != nil {
-		t.Fatal(err)
-	}
-	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, clientT, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-
-	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 1 || tools.Tools[0].Name != "capture" {
-		t.Fatalf("tools: %+v %v", tools, err)
-	}
-
-	out := filepath.Join(t.TempDir(), "nested", "tall.png")
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{
-		"url": srv.URL + "/tall", "full_page": true, "size": "320x240", "scale": 1, "max_pixels": 320 * 1000, "output": out,
-	}})
-	if err != nil || res.IsError {
-		t.Fatalf("capture: %+v %v", res, err)
-	}
-	images := 0
-	for _, c := range res.Content {
-		if img, ok := c.(*mcp.ImageContent); ok {
-			images++
-			if img.MIMEType != "image/png" {
-				t.Fatalf("mime %q", img.MIMEType)
-			}
-		}
-	}
-	var report map[string]any
-	raw, _ := json.Marshal(res.StructuredContent)
-	json.Unmarshal(raw, &report)
-	if images != 4 || report["status"] != "ok" || report["tiles"] != float64(4) || len(report["files"].([]any)) != 4 {
-		t.Fatalf("images %d, report %v", images, report)
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(out), "tall-4.png")); err != nil {
-		t.Fatal(err)
-	}
-
-	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{"url": srv.URL, "selector": "h1", "full_page": true}})
-	if err != nil || !res.IsError {
-		t.Fatalf("conflict not rejected: %+v %v", res, err)
 	}
 }

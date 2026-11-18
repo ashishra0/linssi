@@ -1,4 +1,4 @@
-package main
+package linssi
 
 import (
 	"context"
@@ -101,7 +101,7 @@ func Launch(chromePath string) (*Camera, error) {
 	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.UserDataDir(dir))
 	if chromePath == "" {
-		chromePath = findChrome()
+		chromePath = FindChrome()
 	}
 	if chromePath != "" {
 		opts = append(opts, chromedp.ExecPath(chromePath))
@@ -970,9 +970,9 @@ func ParseStorageState(data []byte) (*StorageState, error) {
 	return s, nil
 }
 
-// findChrome prefers installed browser apps over PATH entries, which can be
+// FindChrome prefers installed browser apps over PATH entries, which can be
 // stale wrapper scripts.
-func findChrome() string {
+func FindChrome() string {
 	var candidates []string
 	switch runtime.GOOS {
 	case "darwin":

@@ -1,6 +1,6 @@
-// Command linssi is the camera for agents: one command or MCP call
-// returns one screenshot you can trust.
-package main
+// Package cli is the linssi command line and MCP server. cmd/linssi runs it;
+// a build can add commands and MCP tools through an Extension.
+package cli
 
 import (
 	"bufio"
@@ -21,9 +21,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ashishra0/linssi"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var version = "0.1.0" // set by the release build with -ldflags "-X main.version=..."
+// Version is set by the release build with -ldflags "-X github.com/ashishra0/linssi/cli.Version=...".
+var Version = "dev"
 
 const shortUsage = `Usage: linssi [flags] URL...    capture pages ("-" reads URLs from stdin)
        linssi mcp [--connect PORT] serve the capture tool to agents
@@ -166,7 +170,7 @@ func parseArgs(args []string, stderr io.Writer) (*cliArgs, error) {
 	}
 	fs.Visit(func(f *flag.Flag) { a.set[f.Name] = true })
 	if *showVersion {
-		fmt.Println("linssi", version)
+		fmt.Println(name, Version)
 		os.Exit(0)
 	}
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(a.out), "."))
@@ -191,7 +195,7 @@ func parseArgs(args []string, stderr io.Writer) (*cliArgs, error) {
 	case a.timeout <= 0:
 		return nil, usageErrorf("--timeout must be greater than zero")
 	}
-	if _, err := ParseViewport(a.size, a.scale); err != nil {
+	if _, err := linssi.ParseViewport(a.size, a.scale); err != nil {
 		return nil, usageError{err}
 	}
 	return a, nil
@@ -201,35 +205,58 @@ func parseArgs(args []string, stderr io.Writer) (*cliArgs, error) {
 // any other extension is taken as part of a directory name.
 var notAnImageExt = map[string]bool{"gif": true, "bmp": true, "tif": true, "tiff": true, "svg": true, "pdf": true, "avif": true, "heic": true, "ico": true}
 
-func main() {
+// Extension adds commands and MCP tools to the CLI, for builds such as
+// Linssi Pro. The zero value is plain linssi.
+type Extension struct {
+	Name     string                          // binary name in help and version output (default "linssi")
+	Help     string                          // extra help text, printed after the flags
+	Commands map[string]func([]string) error // extra subcommands, by name
+	Tools    func(*mcp.Server, *Cameras)     // registers extra MCP tools
+}
+
+var name = "linssi"
+
+// Main runs the CLI with os.Args and exits.
+func Main(ext Extension) {
+	if ext.Name != "" {
+		name = ext.Name
+	}
 	if len(os.Args) > 1 {
 		var err error
-		switch os.Args[1] {
-		case "mcp":
-			err = runMCP(os.Args[2:])
-		case "browser":
+		ran := true
+		switch cmd := os.Args[1]; {
+		case cmd == "mcp":
+			err = runMCP(os.Args[2:], ext)
+		case cmd == "browser":
 			err = runBrowser(os.Args[2:])
+		case ext.Commands[cmd] != nil:
+			err = ext.Commands[cmd](os.Args[2:])
 		default:
-			goto capture
+			ran = false
 		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "linssi:", err)
-			os.Exit(1)
+		if ran {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+				var ue usageError
+				if errors.As(err, &ue) {
+					os.Exit(2)
+				}
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
-capture:
 	if len(os.Args) == 1 {
 		fmt.Fprint(os.Stderr, shortUsage)
 		os.Exit(2)
 	}
 	a, err := parseArgs(os.Args[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Print(help)
+		fmt.Print(help + ext.Help)
 		return
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "linssi: %v\nRun 'linssi -h' for help.\n", err)
+		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s -h' for help.\n", name, err, name)
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -240,22 +267,27 @@ capture:
 	case interrupted:
 		os.Exit(130) // interrupted; run already closed the browser and its profile
 	case errors.As(err, new(usageError)):
-		fmt.Fprintf(os.Stderr, "linssi: %v\nRun 'linssi -h' for help.\n", err)
+		fmt.Fprintf(os.Stderr, "%s: %v\nRun '%s -h' for help.\n", name, err, name)
 		os.Exit(2)
 	case err != nil:
-		fmt.Fprintln(os.Stderr, "linssi:", err)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		os.Exit(1)
 	case failed > 0:
 		os.Exit(1)
 	}
 }
 
+// UsageError marks a mistake in how a command was called; Main exits 2.
+func UsageError(format string, args ...any) error { return usageErrorf(format, args...) }
+
+func ptr[T any](v T) *T { return &v }
+
 func run(ctx context.Context, a *cliArgs) (int, error) {
 	urls, err := collectURLs(a.urls, os.Stdin)
 	if err != nil {
 		return 0, err
 	}
-	vp, err := ParseViewport(a.size, a.scale)
+	vp, err := linssi.ParseViewport(a.size, a.scale)
 	if err != nil {
 		return 0, err
 	}
@@ -263,7 +295,7 @@ func run(ctx context.Context, a *cliArgs) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	opts := Options{
+	opts := linssi.Options{
 		Viewport: vp, Mode: "viewport", Selector: a.selector, Padding: a.padding, Dark: a.dark,
 		Wait: time.Duration(a.wait) * time.Millisecond, WaitFor: a.waitFor,
 		Timeout: time.Duration(max(a.timeout, 1)) * time.Second, Format: format,
@@ -276,16 +308,16 @@ func run(ctx context.Context, a *cliArgs) (int, error) {
 		opts.Mode = "full_page"
 	}
 	if a.storage != "" {
-		if opts.Storage, err = LoadStorageState(a.storage); err != nil {
+		if opts.Storage, err = linssi.LoadStorageState(a.storage); err != nil {
 			return 0, err
 		}
 	}
 
-	var cam *Camera
+	var cam *linssi.Camera
 	if a.connect != "" {
-		cam, err = Attach(a.connect)
+		cam, err = linssi.Attach(a.connect)
 	} else {
-		cam, err = Launch(a.chrome)
+		cam, err = linssi.Launch(a.chrome)
 	}
 	if err != nil {
 		return 0, err
@@ -306,13 +338,13 @@ func run(ctx context.Context, a *cliArgs) (int, error) {
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			var shot *Capture
+			var shot *linssi.Capture
 			err := t.err // a line that isn't a URL fails alone, not the batch
 			if err == nil {
 				shot, err = cam.Capture(ctx, t.url, opts)
 			}
 			if err == nil {
-				err = writeImages(t.path, shot.Images)
+				err = WriteImages(t.path, shot.Images)
 			}
 			if ctx.Err() != nil {
 				return // interrupted: say nothing more
@@ -322,14 +354,14 @@ func run(ctx context.Context, a *cliArgs) (int, error) {
 			if err != nil {
 				failed++
 				if a.json {
-					printJSON(errorReport(t.url, t.path, opts, err))
+					printJSON(ErrorReport(t.url, t.path, opts, err))
 				} else {
 					fmt.Fprintf(os.Stderr, "✗ %s — %v\n", t.url, err)
 				}
 				return
 			}
 			if a.json {
-				printJSON(successReport(t.url, t.path, opts, shot))
+				printJSON(SuccessReport(t.url, t.path, opts, shot))
 				return
 			}
 			name := t.path
@@ -367,10 +399,10 @@ type Report struct {
 	Tiles     int      `json:"tiles,omitempty"`
 	Files     []string `json:"files,omitempty"`
 	Error     string   `json:"error,omitempty"`
-	*PageInfo
+	*linssi.PageInfo
 }
 
-func baseReport(status, u, out string, o Options) Report {
+func baseReport(status, u, out string, o linssi.Options) Report {
 	r := Report{Status: status, URL: u, Output: absPath(out), Mode: o.Mode}
 	if o.Mode == "element" {
 		r.Selector, r.Padding = o.Selector, ptr(o.Padding)
@@ -378,7 +410,8 @@ func baseReport(status, u, out string, o Options) Report {
 	return r
 }
 
-func successReport(u, out string, o Options, c *Capture) Report {
+// SuccessReport is the JSON report of a finished capture.
+func SuccessReport(u, out string, o linssi.Options, c *linssi.Capture) Report {
 	r := baseReport("ok", u, out, o)
 	r.CSSWidth, r.CSSHeight, r.Scale = c.CSSWidth, c.CSSHeight, round2(c.Scale)
 	r.Format, r.Bytes, r.Tiles = extFor(o.Format), c.Bytes(), len(c.Images)
@@ -392,7 +425,8 @@ func successReport(u, out string, o Options, c *Capture) Report {
 	return r
 }
 
-func errorReport(u, out string, o Options, err error) Report {
+// ErrorReport is the JSON report of a failed capture.
+func ErrorReport(u, out string, o linssi.Options, err error) Report {
 	r := baseReport("error", u, out, o)
 	r.Error = err.Error()
 	return r
@@ -427,7 +461,7 @@ func collectURLs(args []string, stdin io.Reader) ([]target, error) {
 	}
 	urls := make([]target, len(raw))
 	for i, r := range raw {
-		u, err := NormalizeURL(r)
+		u, err := linssi.NormalizeURL(r)
 		if err != nil {
 			urls[i] = target{url: r, err: err}
 		} else {
@@ -527,7 +561,8 @@ func tilePath(out string, i int) string {
 	return fmt.Sprintf("%s-%d%s", strings.TrimSuffix(out, ext), i, ext)
 }
 
-func writeImages(out string, images [][]byte) error {
+// WriteImages writes one image to out, or tiles to out-1, out-2, ...
+func WriteImages(out string, images [][]byte) error {
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
@@ -580,7 +615,7 @@ Sign in to your apps in that window once; the profile keeps the logins.
 Capture through it:       linssi --connect %[1]d localhost:3000/app
 Give it to Claude Code:   claude mcp add linssi -- linssi mcp --connect %[1]d
 `, *port)
-	if cam, err := Attach(strconv.Itoa(*port)); err == nil {
+	if cam, err := linssi.Attach(strconv.Itoa(*port)); err == nil {
 		cam.Close()
 		fmt.Printf("A Chrome is already listening on port %d.\n%s", *port, next)
 		return nil
@@ -595,7 +630,7 @@ Give it to Claude Code:   claude mcp add linssi -- linssi mcp --connect %[1]d
 	}
 	path := *chrome
 	if path == "" {
-		path = findChrome()
+		path = linssi.FindChrome()
 	}
 	if path == "" {
 		return errors.New("no Chrome, Chromium, Edge or Brave found; pass --chrome")

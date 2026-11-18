@@ -1,4 +1,4 @@
-package main
+package linssi
 
 import (
 	"encoding/json"

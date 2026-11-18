@@ -6,7 +6,7 @@ set -eu
 
 cd "$(dirname "$0")/../site"
 bin=$(mktemp -d)/linssi
-(cd .. && go build -o "$bin" .)
+(cd .. && go build -o "$bin" ./cmd/linssi)
 
 python3 -I -m http.server 3000 --bind 127.0.0.1 --directory . >/dev/null 2>&1 &
 server=$!
