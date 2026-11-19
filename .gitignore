@@ -1,5 +1,5 @@
-linssi
-dist/
+/linssi
+/dist/
 
 # wrangler files
 .wrangler
