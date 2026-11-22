@@ -102,6 +102,16 @@ Releases: push a `v*` tag; `.github/workflows/release.yml` builds macOS, Linux a
 
 Website: `site/` is a static site, deployed to Cloudflare at linssi.app with `npx wrangler deploy`. `go run scripts/art.go` redraws the hero art, and `sh scripts/shots.sh` retakes every screenshot on the page with Linssi itself.
 
-## Not in scope
+## Limitations
 
-Clicking, typing and scripted flows. Use a browser-automation tool for those, then capture with Linssi.
+Not in scope, on purpose: clicking, typing and scripted flows. Use a browser-automation tool to get the page into the right state, then capture with Linssi.
+
+Known gaps, and room to improve:
+
+- **Signing in takes a separate browser.** Chrome 136 and later won't let tools drive your everyday profile, so you sign in once more in Linssi's browser. Google sign-in may refuse a browser that is being remote-controlled; signing in with email, or exporting a session, works around it.
+- **Session export saves cookies only.** Apps that keep their login in localStorage still need `--connect`.
+- **Sign-in detection is a heuristic.** It catches login redirects, password fields, "Sign in with…" or "Continue with…" buttons, and the Apple and Google sign-in buttons. A marketing page with a "Sign up with Google" button gets a false warning, and a sign-in screen built some other way can slip through.
+- **Infinite feeds.** A full-page capture scrolls once so lazy content loads, but it doesn't keep loading an endless feed. You get what has loaded.
+- **Speed depends on the site.** A local app captures in under a second. Real sites with fonts, images and trackers take 1–4 s.
+- **Platforms.** The install script covers macOS and Linux; Windows uses the release binary or `go install`. `linssi browser --install` has no Chrome for Testing build for Linux on ARM, so pass `--chrome` there.
+- **No image diffs.** Linssi captures; comparing two captures is up to the agent.
