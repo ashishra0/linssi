@@ -86,6 +86,8 @@ func TestLooksLikeLogin(t *testing.T) {
 		{"http://localhost:3000/a", "http://localhost:3000/a", false},
 		{"http://localhost:3000/to-authors", "http://localhost:3000/authors", false},
 		{"https://app.dev/", "https://login.app.dev/", true},
+		{"https://app.dev/board", "https://app.dev/signup", true},
+		{"https://app.dev/register", "https://app.dev/register", false},
 	}
 	for _, c := range cases {
 		if got := looksLikeLogin(c.req, c.final); got != c.want {
@@ -195,7 +197,24 @@ func site() *httptest.Server {
 		fmt.Fprint(w, "<h1>Not found</h1>")
 	})
 	mux.HandleFunc("/private", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/login", http.StatusFound) })
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "<h1>Sign in</h1>") })
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<h1>Sign in</h1><input type="password"><button>Continue with Google</button>`)
+	})
+	// Sign-in walls served in place, with no redirect (as mymind does at /).
+	mux.HandleFunc("/wall", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<h1>Your new mind is here</h1><button>Sign up with Google</button><a href="/login">Sign in here.</a>`)
+	})
+	// SDK buttons with no visible text: Apple's names itself only in aria-label.
+	mux.HandleFunc("/sdkwall", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<h1>Welcome</h1><button id="appleid-signin"><div role="button" aria-label="Sign in with Apple" style="width:200px;height:40px"><svg width="200" height="40"></svg></div></button>`)
+	})
+	mux.HandleFunc("/pwform", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<h1>Welcome back</h1><form><input type="email"><input type="password"><button>Next</button></form>`)
+	})
+	// A plain "Sign in" nav link on a content page is not a wall.
+	mux.HandleFunc("/marketing", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<nav><a href="/login">Sign in</a></nav><h1>Pricing</h1><p>Plans for teams.</p>`)
+	})
 	mux.HandleFunc("/tall", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<style>body{margin:0}.hero{height:100vh;background:#00f}.rest{height:3760px;background:#f00}</style><div class="hero"></div><div class="rest">tall</div>`)
 	})
@@ -281,6 +300,18 @@ func TestBrowserAuthReadinessAndTiling(t *testing.T) {
 	}
 	expect("/missing", "HTTP 404")
 	expect("/private", "login page")
+	expect("/wall", "sign-in or sign-up screen")
+	expect("/pwform", "sign-in or sign-up screen")
+	expect("/sdkwall", "sign-in or sign-up screen")
+	for _, path := range []string{"/login", "/marketing"} { // asked for the login page itself; a nav link only
+		shot, err := cam.Capture(ctx, srv.URL+path, opts("viewport"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := strings.Join(shot.Page.Warnings, "\n"); strings.Contains(w, "sign-in") || strings.Contains(w, "login page") {
+			t.Fatalf("%s: unexpected auth warning %q", path, w)
+		}
+	}
 	expect("/blank", "blank")
 	expect("/blank", "boom")
 

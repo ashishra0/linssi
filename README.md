@@ -67,6 +67,7 @@ The JSON report (`--json`) and every MCP result carry the final URL, HTTP status
 
 - HTTP 4xx and 5xx
 - a redirect to what looks like a login page
+- a sign-in or sign-up screen shown in place, with no redirect: a password field, a "Sign in with…" or "Continue with…" button, or the Apple or Google sign-in button on the first screen
 - a blank page
 - up to five console errors
 - a request that never finished (captured anyway after 5 s)

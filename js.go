@@ -73,11 +73,22 @@ const probeJS = `(() => {
   const body = document.body;
   const text = (body?.innerText ?? '').trim().length;
   const media = document.querySelector('img, svg, canvas, video, picture, iframe');
+  // A sign-in wall served in place, with no redirect: a visible password field,
+  // a "Sign in with Google" / "Continue with Apple" style button (by its text or
+  // accessible name, since SDK buttons are often SVG), or the Apple and Google
+  // sign-in SDK buttons themselves.
+  const onScreen = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0; };
+  const provider = /\b(sign|log)\s?(in|up)\s+with\b|\bcontinue\s+with\s+(google|apple|github|microsoft|email|sso)\b/i;
+  const named = el => [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title')].some(s => s && provider.test(s));
+  const sdk = '#appleid-signin, .g_id_signin, iframe[src*="accounts.google.com/gsi"]';
+  const authWall = [...document.querySelectorAll('input[type=password], ' + sdk)].some(onScreen) ||
+    [...document.querySelectorAll('button, a, [role=button]')].some(el => named(el) && onScreen(el));
   return {
     url: location.href,
     status: nav && nav.responseStatus ? nav.responseStatus : null,
     title: document.title,
     blank: !body || (text === 0 && !media),
+    authWall,
     scrollX, scrollY,
     docHeight: Math.max(body?.scrollHeight ?? 0, document.documentElement.scrollHeight),
     innerWidth, innerHeight,

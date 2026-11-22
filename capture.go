@@ -320,6 +320,8 @@ func (c *Camera) shoot(ctx context.Context, rawURL string, o Options, started ti
 	}
 	if looksLikeLogin(rawURL, p.URL) {
 		warnings = append(warnings, fmt.Sprintf("redirected to what looks like a login page (%s); pass storage_state or headers, or connect to a logged-in browser", p.URL))
+	} else if p.AuthWall && !isLoginURL(rawURL) {
+		warnings = append(warnings, "page shows a sign-in or sign-up screen, not signed-in content; pass storage_state or headers, or connect to a logged-in browser")
 	}
 	if p.Blank {
 		warnings = append(warnings, "page looks blank: no text or media rendered")
@@ -670,6 +672,7 @@ type probeResult struct {
 	Status      *int    `json:"status"`
 	Title       string  `json:"title"`
 	Blank       bool    `json:"blank"`
+	AuthWall    bool    `json:"authWall"`
 	ScrollX     float64 `json:"scrollX"`
 	ScrollY     float64 `json:"scrollY"`
 	DocHeight   float64 `json:"docHeight"`
@@ -761,27 +764,31 @@ func planTiles(width, height int, scale float64, maxPixels int64, tileable bool)
 // looksLikeLogin reports whether the page ended on a sign-in route the caller
 // didn't ask for. It matches whole path segments, so /authors is not /auth.
 func looksLikeLogin(requested, final string) bool {
-	segments := map[string]bool{
-		"login": true, "log-in": true, "signin": true, "sign-in": true, "sign_in": true, "auth": true,
-		"sso": true, "oauth": true, "oauth2": true, "session": true, "sessions": true, "authorize": true,
-	}
-	hit := func(raw string) bool {
-		u, err := url.Parse(raw)
-		if err != nil {
-			return false
-		}
-		host := strings.ToLower(u.Hostname())
-		if strings.HasPrefix(host, "login.") || strings.HasPrefix(host, "auth.") || strings.HasPrefix(host, "sso.") || host == "accounts.google.com" {
-			return true
-		}
-		for _, seg := range strings.Split(strings.ToLower(u.Path), "/") {
-			if segments[seg] {
-				return true
-			}
-		}
+	return isLoginURL(final) && !isLoginURL(requested)
+}
+
+var loginSegments = map[string]bool{
+	"login": true, "log-in": true, "signin": true, "sign-in": true, "sign_in": true, "auth": true,
+	"sso": true, "oauth": true, "oauth2": true, "session": true, "sessions": true, "authorize": true,
+	"signup": true, "sign-up": true, "register": true,
+}
+
+// isLoginURL reports whether raw is a sign-in or sign-up route.
+func isLoginURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
 		return false
 	}
-	return hit(final) && !hit(requested)
+	host := strings.ToLower(u.Hostname())
+	if strings.HasPrefix(host, "login.") || strings.HasPrefix(host, "auth.") || strings.HasPrefix(host, "sso.") || host == "accounts.google.com" {
+		return true
+	}
+	for _, seg := range strings.Split(strings.ToLower(u.Path), "/") {
+		if loginSegments[seg] {
+			return true
+		}
+	}
+	return false
 }
 
 // connectURL turns "9222", "host:9222" or a full URL into a DevTools address.
