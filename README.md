@@ -22,7 +22,7 @@ curl -fsSL https://linssi.app/install | sh
 go install github.com/ashishra0/linssi/cmd/linssi@latest
 ```
 
-Needs a Chrome-family browser (Chrome, Chromium, Edge or Brave). Nothing else.
+Needs a Chrome-family browser (Chrome, Chromium, Edge or Brave), or Linssi's own: `linssi browser --install` downloads Chrome for Testing. Captures run headless with a throwaway profile, never your own.
 
 ## Give your agent eyes
 
@@ -50,15 +50,31 @@ MCP captures default to 1.15 MP per image, about what Claude keeps before it dow
 
 ## Logged-in pages
 
-1. **A browser you sign in to once.** Run `linssi browser`. It opens Chrome with a profile of its own and the DevTools port 9222. Sign in to your apps in that window; the profile keeps the logins. Then capture through it:
+1. **A browser you sign in to once.** Linssi has its own browser: [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing), with its own name, icon and profile, so it never gets mixed up with the browser you use every day.
+
+   ```
+   linssi browser --install    # first time: downloads Chrome for Testing (~150 MB) and opens it
+   linssi browser              # later: opens it, or a new window if you closed the last one
+   ```
+
+   Sign in to your apps in that window; the profile keeps the logins. Then capture through it:
 
    ```
    linssi --connect 9222 localhost:3000/app
    claude mcp add linssi -- linssi mcp --connect 9222
    ```
 
-   Linssi opens its own tab, captures, and closes that tab only; the browser keeps running. Why a separate profile: Chrome 136 and later refuse remote debugging on your everyday profile, so `--connect` can't reach the Chrome you browse with. Any Chrome started with `--remote-debugging-port=PORT --user-data-dir=DIR` works too.
-2. **Saved session.** `--storage-state auth.json` takes a [Playwright storage state](https://playwright.dev/docs/auth) or a cookie-array export from a browser extension.
+   Linssi opens its own tab, captures, and closes that tab only; the browser keeps running. `linssi browser --status` shows whether it's running, and `linssi browser --stop` quits it. Both act only on the browser `linssi browser` started, never on another browser on the same port.
+
+   Why a separate browser: Chrome 136 and later refuse remote debugging on your everyday profile, so `--connect` can't reach the Chrome you browse with. Linssi doesn't open a second copy of your everyday browser on its own, because that copy looks just like yours. To use one anyway, pass `--chrome PATH`.
+2. **Saved session.** `--storage-state auth.json` takes a [Playwright storage state](https://playwright.dev/docs/auth) or a cookie-array export from a browser extension. To make one without an extension, sign in through `linssi browser`, then save its cookies:
+
+   ```
+   linssi session export --domain mymind.com -o mymind.json
+   linssi --storage-state mymind.json access.mymind.com     # headless, no browser window needed
+   ```
+
+   The file holds your logins: keep it private and out of git. It saves cookies only, so a site that keeps its login in localStorage still needs `--connect`.
 3. **Headers.** `-H 'Name: value'`, repeatable. Every request the page makes gets them, third-party ones too, so use a scoped token.
 
 ## Warnings

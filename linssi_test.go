@@ -165,7 +165,7 @@ var (
 
 func camera(t *testing.T) *Camera {
 	t.Helper()
-	camOnce.Do(func() { testCam, camErr = Launch("") })
+	camOnce.Do(func() { testCam, camErr = Launch(os.Getenv("CHROME")) })
 	if camErr != nil {
 		t.Skipf("no browser: %v", camErr)
 	}

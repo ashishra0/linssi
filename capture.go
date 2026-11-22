@@ -977,9 +977,13 @@ func ParseStorageState(data []byte) (*StorageState, error) {
 	return s, nil
 }
 
-// FindChrome prefers installed browser apps over PATH entries, which can be
-// stale wrapper scripts.
+// FindChrome prefers Linssi's own Chrome for Testing, then installed browser
+// apps over PATH entries, which can be stale wrapper scripts. Captures run
+// headless with a throwaway profile, so any of these is safe to use there.
 func FindChrome() string {
+	if p := DedicatedChrome(); p != "" {
+		return p
+	}
 	var candidates []string
 	switch runtime.GOOS {
 	case "darwin":

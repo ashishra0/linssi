@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ashishra0/linssi"
+	"github.com/chromedp/cdproto/network"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -31,7 +33,8 @@ var Version = "dev"
 
 const shortUsage = `Usage: linssi [flags] URL...    capture pages ("-" reads URLs from stdin)
        linssi mcp [--connect PORT] serve the capture tool to agents
-       linssi browser              open a Chrome for logged-in captures
+       linssi browser              open Linssi's browser for logged-in captures
+       linssi session export       save its logins to a file for --storage-state
 Run 'linssi -h' for all flags and examples.
 `
 
@@ -40,7 +43,11 @@ const help = `linssi — the camera for agents
 Usage:
   linssi [flags] URL...        capture pages ("-" reads URLs from stdin)
   linssi mcp [--connect PORT]  serve the capture tool over MCP stdio
-  linssi browser [--port N]    open a Chrome with its own profile for logged-in captures
+  linssi browser [--port N]    open Linssi's browser (its own profile) for logged-in captures
+  linssi browser --install     download Chrome for Testing for it, once (~150 MB)
+  linssi browser --status      show whether it is running
+  linssi browser --stop        quit it (never any other browser)
+  linssi session export [-o FILE] [--domain D]   save its logins for --storage-state
 
 Examples:
   linssi example.com                          1440×900 @2x → example.com.png
@@ -229,6 +236,8 @@ func Main(ext Extension) {
 			err = runMCP(os.Args[2:], ext)
 		case cmd == "browser":
 			err = runBrowser(os.Args[2:])
+		case cmd == "session":
+			err = runSession(os.Args[2:])
 		case ext.Commands[cmd] != nil:
 			err = ext.Commands[cmd](os.Args[2:])
 		default:
@@ -596,50 +605,259 @@ func humanSize(n int) string {
 	return fmt.Sprintf("%d KB", (n+1023)/1024)
 }
 
-// runBrowser opens a visible Chrome with a profile of its own and a DevTools
+// browserProfile is where 'linssi browser' keeps its logins.
+func browserProfile() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "linssi", "browser-profile"), nil
+}
+
+// runBrowser opens a visible browser with a profile of its own and a DevTools
 // port, so people sign in to their apps once and agents capture through it.
 // Chrome 136+ refuses remote debugging on the default profile, which is why
 // "attach to the Chrome you already use" needs this separate profile.
+//
+// It runs Linssi's own Chrome for Testing and never picks a browser on its
+// own: a second copy of someone's everyday browser looks just like theirs, so
+// its windows get mixed up with theirs and closed by mistake.
 func runBrowser(args []string) error {
 	fs := flag.NewFlagSet("linssi browser", flag.ContinueOnError)
 	port := fs.Int("port", 9222, "DevTools port to listen on")
-	chrome := fs.String("chrome", os.Getenv("CHROME"), "browser binary (auto-detected; also $CHROME)")
+	chrome := fs.String("chrome", os.Getenv("CHROME"), "use this browser binary instead of Linssi's Chrome for Testing (also $CHROME)")
+	install := fs.Bool("install", false, "download Chrome for Testing for Linssi to use (about 150 MB, once)")
+	status := fs.Bool("status", false, "show whether Linssi's browser is running")
+	stop := fs.Bool("stop", false, "quit Linssi's browser (never any other browser)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
+	profile, err := browserProfile()
+	if err != nil {
+		return err
+	}
 	next := fmt.Sprintf(`
 Sign in to your apps in that window once; the profile keeps the logins.
 Capture through it:       linssi --connect %[1]d localhost:3000/app
 Give it to Claude Code:   claude mcp add linssi -- linssi mcp --connect %[1]d
+Quit it later:            linssi browser --stop
 `, *port)
+
 	if cam, err := linssi.Attach(strconv.Itoa(*port)); err == nil {
-		cam.Close()
-		fmt.Printf("A Chrome is already listening on port %d.\n%s", *port, next)
+		defer cam.Close()
+		ours := launchedHere(profile, *port)
+		windows, _ := cam.Windows()
+		switch {
+		case *status && ours:
+			fmt.Printf("Linssi's browser is running on port %d: %s, %d open tab(s).\nProfile: %s\n", *port, cam.BrowserVersion(), windows, profile)
+			return nil
+		case *status:
+			fmt.Printf("Port %d has a browser that isn't Linssi's (%s).\n", *port, cam.BrowserVersion())
+			return nil
+		case !ours:
+			// Never close, reuse or open windows in a browser Linssi didn't start.
+			return fmt.Errorf("port %d belongs to a browser that isn't Linssi's; leaving it alone. Use --port for another port", *port)
+		case *stop:
+			if err := quitLaunched(profile); err != nil {
+				return err
+			}
+			os.Remove(launchFile(profile))
+			fmt.Printf("Quit Linssi's browser on port %d. Its logins stay in %s.\n", *port, profile)
+			return nil
+		case windows == 0:
+			// On macOS a browser keeps running after its last window closes.
+			if err := cam.OpenWindow("about:blank"); err != nil {
+				return err
+			}
+			fmt.Printf("Linssi's browser was running with no window; opened a new one.\n%s", next)
+			return nil
+		default:
+			fmt.Printf("Linssi's browser is already running on port %d.\n%s", *port, next)
+			return nil
+		}
+	}
+	if *status || *stop {
+		fmt.Printf("Linssi's browser isn't running on port %d.\n", *port)
 		return nil
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	profile := filepath.Join(base, "linssi", "browser-profile")
-	if err := os.MkdirAll(profile, 0o700); err != nil {
-		return err
-	}
+
 	path := *chrome
 	if path == "" {
-		path = linssi.FindChrome()
+		path = linssi.DedicatedChrome()
+	}
+	if path == "" && *install {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if path, err = linssi.InstallDedicatedChrome(ctx, os.Stdout); err != nil {
+			return err
+		}
 	}
 	if path == "" {
-		return errors.New("no Chrome, Chromium, Edge or Brave found; pass --chrome")
+		return usageErrorf(`Linssi's browser isn't installed.
+  linssi browser --install          download Chrome for Testing for Linssi (about 150 MB, once)
+  linssi browser --chrome PATH      or use a browser you choose
+Linssi doesn't pick one of your browsers itself: a second copy of the browser you use every day looks just like it.`)
+	}
+	if path != linssi.DedicatedChrome() {
+		fmt.Printf("Using %s. This opens a separate copy with Linssi's own profile; it can look like your usual window.\n", filepath.Base(path))
+	}
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		return err
 	}
 	cmd := exec.Command(path, fmt.Sprintf("--remote-debugging-port=%d", *port), "--user-data-dir="+profile,
 		"--no-first-run", "--no-default-browser-check")
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting %s: %w", path, err)
 	}
+	rec, _ := json.Marshal(launch{PID: cmd.Process.Pid, Port: *port})
+	if err := os.WriteFile(launchFile(profile), rec, 0o600); err != nil {
+		return err
+	}
 	fmt.Printf("Opened %s with the Linssi profile on port %d.\nProfile: %s\n%s", filepath.Base(path), *port, profile, next)
 	return nil
+}
+
+// launch records the browser 'linssi browser' started, so later calls can
+// tell it apart from any other browser on the same port.
+type launch struct {
+	PID  int `json:"pid"`
+	Port int `json:"port"`
+}
+
+func launchFile(profile string) string { return filepath.Join(filepath.Dir(profile), "browser.json") }
+
+// launchedHere reports whether the browser on port is the one 'linssi browser'
+// started: that process is still alive and was launched on this port. Only one
+// process can listen on a port, so a live match is that browser.
+// ponytail: trusts the PID; a reused PID with a foreign browser on the same port would fool it.
+func launchedHere(profile string, port int) bool {
+	data, err := os.ReadFile(launchFile(profile))
+	var l launch
+	if err != nil || json.Unmarshal(data, &l) != nil || l.Port != port || l.PID <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(l.PID)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true // FindProcess fails on Windows when the process is gone
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// quitLaunched asks the browser 'linssi browser' started to quit, the way
+// quitting from its menu would, and waits for it to exit.
+// ponytail: Windows has no graceful signal here, so it ends the process; use a window-close message if that loses state.
+func quitLaunched(profile string) error {
+	data, err := os.ReadFile(launchFile(profile))
+	if err != nil {
+		return err
+	}
+	var l launch
+	if err := json.Unmarshal(data, &l); err != nil {
+		return err
+	}
+	p, err := os.FindProcess(l.PID)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return p.Kill()
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		return err
+	}
+	for range 50 {
+		if p.Signal(syscall.Signal(0)) != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("Linssi's browser (pid %d) didn't quit within 5 s", l.PID)
+}
+
+// runSession saves the signed-in session from Linssi's browser as a storage
+// state file, so CI and headless captures can use it with --storage-state.
+func runSession(args []string) error {
+	if len(args) == 0 || args[0] != "export" {
+		return usageErrorf("usage: linssi session export [-o FILE] [--domain DOMAIN]... [--connect PORT]")
+	}
+	fs := flag.NewFlagSet("linssi session export", flag.ContinueOnError)
+	out := fs.String("o", "linssi-session.json", "file to write")
+	connect := fs.String("connect", "9222", "Linssi's browser: port, host:port or URL")
+	var domains stringList
+	fs.Var(&domains, "domain", "only export cookies for this site and its subdomains (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	cam, err := linssi.Attach(*connect)
+	if err != nil {
+		return err
+	}
+	defer cam.Close()
+	cookies, err := cam.Cookies()
+	if err != nil {
+		return err
+	}
+	data, n := storageState(cookies, domains)
+	if n == 0 {
+		return errors.New("no cookies to export; sign in to the site in Linssi's browser first (linssi browser)")
+	}
+	if err := os.WriteFile(*out, data, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %d cookie(s) to %s. It holds your logins: keep it private and out of git.\nUse it with:  linssi --storage-state %s URL\n", n, *out, *out)
+	return nil
+}
+
+// storageState writes cookies as a Playwright storage state, keeping only
+// cookies for the given domains (all of them when none are given).
+// ponytail: cookies only; localStorage logins need a page visit per origin, add if a site needs it.
+func storageState(cookies []*network.Cookie, domains []string) ([]byte, int) {
+	type cookie struct {
+		Name     string  `json:"name"`
+		Value    string  `json:"value"`
+		Domain   string  `json:"domain"`
+		Path     string  `json:"path"`
+		Expires  float64 `json:"expires"`
+		HTTPOnly bool    `json:"httpOnly"`
+		Secure   bool    `json:"secure"`
+		SameSite string  `json:"sameSite,omitempty"`
+	}
+	keep := func(d string) bool {
+		if len(domains) == 0 {
+			return true
+		}
+		d = strings.TrimPrefix(strings.ToLower(d), ".")
+		for _, want := range domains {
+			want = strings.TrimPrefix(strings.ToLower(want), ".")
+			if d == want || strings.HasSuffix(d, "."+want) {
+				return true
+			}
+		}
+		return false
+	}
+	state := struct {
+		Cookies []cookie `json:"cookies"`
+		Origins []any    `json:"origins"`
+	}{Cookies: []cookie{}, Origins: []any{}}
+	for _, c := range cookies {
+		if !keep(c.Domain) {
+			continue
+		}
+		exp := c.Expires
+		if c.Session {
+			exp = -1
+		}
+		state.Cookies = append(state.Cookies, cookie{c.Name, c.Value, c.Domain, c.Path, exp, c.HTTPOnly, c.Secure, string(c.SameSite)})
+	}
+	data, _ := json.MarshalIndent(state, "", "  ")
+	return data, len(state.Cookies)
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ashishra0/linssi"
+	"github.com/chromedp/cdproto/network"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -59,7 +60,7 @@ func TestNaming(t *testing.T) {
 // browser is installed.
 func site(t *testing.T) *httptest.Server {
 	t.Helper()
-	cam, err := linssi.Launch("")
+	cam, err := linssi.Launch(os.Getenv("CHROME"))
 	if err != nil {
 		t.Skipf("no browser: %v", err)
 	}
@@ -124,5 +125,28 @@ func TestMCPCaptureTool(t *testing.T) {
 	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "capture", Arguments: map[string]any{"url": srv.URL, "selector": "h1", "full_page": true}})
 	if err != nil || !res.IsError {
 		t.Fatalf("conflict not rejected: %+v %v", res, err)
+	}
+}
+
+func TestStorageStateExport(t *testing.T) {
+	cookies := []*network.Cookie{
+		{Name: "sid", Value: "a", Domain: ".mymind.com", Path: "/", Expires: 2e9, HTTPOnly: true, Secure: true, SameSite: network.CookieSameSiteLax},
+		{Name: "tmp", Value: "b", Domain: "access.mymind.com", Path: "/", Session: true},
+		{Name: "other", Value: "c", Domain: "notmymind.com", Path: "/"},
+	}
+	data, n := storageState(cookies, []string{"mymind.com"})
+	if n != 2 {
+		t.Fatalf("kept %d cookies, want 2: %s", n, data)
+	}
+	// The file must load back through --storage-state.
+	s, err := linssi.ParseStorageState(data)
+	if err != nil || len(s.Cookies) != 2 {
+		t.Fatalf("round trip: %v %+v", err, s)
+	}
+	if !bytes.Contains(data, []byte(`"expires": -1`)) || bytes.Contains(data, []byte("notmymind")) {
+		t.Fatalf("session cookie or domain filter wrong: %s", data)
+	}
+	if _, n := storageState(cookies, nil); n != 3 {
+		t.Fatalf("no filter kept %d, want 3", n)
 	}
 }
