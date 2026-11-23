@@ -96,7 +96,10 @@ The JSON report (`--json`) and every MCP result carry the final URL, HTTP status
 ```
 go test ./...          # browser tests use the Chrome found on this machine
 go build ./cmd/linssi
+go run ./bench         # reliability benchmark: silent failures per tool
 ```
+
+`bench/cases.json` is a corpus of pages that break screenshot tools (late content, skeletons, sign-in walls, error pages served as 200, bot challenges, very tall pages), served from local fixtures in `bench/fixtures.go`. Each capture is graded from its pixels and its report: right, flagged, or a silent failure (a wrong image reported as ok). `-tools linssi,iris` picks the tools, `-live` adds a few real sites, `-only REGEXP` narrows the cases. It runs nightly in CI.
 
 Releases: push a `v*` tag; `.github/workflows/release.yml` builds macOS, Linux and Windows binaries, which `site/install.sh` (served at linssi.app/install) downloads.
 

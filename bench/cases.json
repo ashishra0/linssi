@@ -1,0 +1,64 @@
+[
+  {"name": "plain", "path": "/plain", "category": "control", "expect": "content", "why": "A static page every tool should get right."},
+
+  {"name": "fade-300", "path": "/fade?ms=300", "category": "animation", "expect": "content", "why": "Short entrance fade."},
+  {"name": "fade-1200", "path": "/fade?ms=1200", "category": "animation", "expect": "content", "why": "A captured mid-fade page looks washed out."},
+  {"name": "fade-3000", "path": "/fade?ms=3000", "category": "animation", "expect": "content", "why": "Slow hero fade, common on marketing sites."},
+  {"name": "fade-delay-1000", "path": "/fade-delay?ms=1000", "category": "animation", "expect": "content", "why": "Content is invisible until the animation delay ends."},
+  {"name": "fade-delay-2500", "path": "/fade-delay?ms=2500", "category": "animation", "expect": "content", "why": "A long delay looks like an empty page that's already settled."},
+  {"name": "slide-800", "path": "/slide?ms=800", "category": "animation", "expect": "content", "why": "Content starts off-screen and slides in."},
+  {"name": "loop", "path": "/loop", "category": "animation", "expect": "content", "why": "An endless animation must not block the capture."},
+
+  {"name": "late-200", "path": "/late?ms=200", "category": "spa", "expect": "content", "why": "Content inserted by JS just after load."},
+  {"name": "late-1000", "path": "/late?ms=1000", "category": "spa", "expect": "content", "why": "Content inserted by JS a second after load, with no loading signal."},
+  {"name": "spa-500", "path": "/spa?ms=500", "category": "spa", "expect": "content", "why": "Spinner, then data from a fast API."},
+  {"name": "spa-2000", "path": "/spa?ms=2000", "category": "spa", "expect": "content", "why": "Spinner, then data from a slow API."},
+  {"name": "spa-4000", "path": "/spa?ms=4000", "category": "spa", "expect": "content", "why": "Spinner past most tools' settle limits."},
+  {"name": "skeleton-1500", "path": "/skeleton?ms=1500", "category": "spa", "expect": "content", "why": "Shimmering skeletons look like a finished page."},
+  {"name": "skeleton-3500", "path": "/skeleton?ms=3500", "category": "spa", "expect": "content", "why": "Skeletons held for a slow API."},
+  {"name": "hydrate-800", "path": "/hydrate?ms=800", "category": "spa", "expect": "content", "why": "Server HTML is hidden until the app hydrates."},
+  {"name": "iframe-1000", "path": "/iframe?ms=1000", "category": "spa", "expect": "content", "why": "Late content inside an iframe."},
+  {"name": "canvas-800", "path": "/canvas?ms=800", "category": "spa", "expect": "content", "why": "A chart drawn on a canvas after load; the DOM never changes."},
+
+  {"name": "img-500", "path": "/img?ms=500", "category": "images", "expect": "content", "why": "An image that arrives after half a second."},
+  {"name": "img-2500", "path": "/img?ms=2500", "category": "images", "expect": "content", "why": "A slow hero image."},
+  {"name": "bg-1500", "path": "/bg?ms=1500", "category": "images", "expect": "content", "why": "A CSS background image; waiting on <img> tags misses it."},
+  {"name": "lazy-4000", "path": "/lazy?h=4000", "category": "images", "full": true, "expect": "content", "why": "A lazy image below the fold loads only if the page is scrolled."},
+  {"name": "reveal-3000", "path": "/reveal?h=3000", "category": "images", "full": true, "expect": "content", "why": "Scroll-reveal content stays transparent until it's scrolled into view."},
+
+  {"name": "tall-6000", "path": "/tall?h=6000", "category": "tall", "full": true, "expect": "content", "why": "Content at the bottom of a tall page."},
+  {"name": "tall-20000", "path": "/tall?h=20000", "category": "tall", "full": true, "expect": "content", "why": "Past Chrome's 16k-pixel texture limit at 1x."},
+  {"name": "infinite", "path": "/infinite", "category": "tall", "full": true, "expect": "content", "why": "An endless feed must not hang a full-page capture."},
+  {"name": "hang", "path": "/hang", "category": "network", "expect": "content", "why": "A request that never finishes must not block the capture."},
+
+  {"name": "cookie-banner", "path": "/banner", "category": "consent", "expect": "content", "why": "A banner that slides in over the bottom of the page."},
+  {"name": "consent-wall", "path": "/consent-wall", "category": "consent", "expect": "warn", "why": "A full-screen consent dialog hides the page."},
+
+  {"name": "dark", "path": "/dark", "category": "emulation", "dark": true, "expect": "content", "why": "Content only shown with prefers-color-scheme: dark."},
+  {"name": "mobile", "path": "/mobile", "category": "emulation", "size": "iphone", "expect": "content", "why": "Content only shown below 500 px wide."},
+
+  {"name": "signin-form", "path": "/account", "category": "sign-in", "expect": "warn", "why": "A sign-in form served in place, with no redirect."},
+  {"name": "signin-oauth", "path": "/signin-oauth", "category": "sign-in", "expect": "warn", "why": "Only 'Continue with Google/Apple' buttons, no password field."},
+  {"name": "signin-late-1200", "path": "/signin-late?ms=1200", "category": "sign-in", "expect": "warn", "why": "Like access.mymind.com: an empty page renders its sign-in screen from JS, then fades in."},
+  {"name": "signin-late-300", "path": "/signin-late?ms=300", "category": "sign-in", "expect": "warn", "why": "JS-rendered sign-in screen, quick."},
+  {"name": "login-redirect", "path": "/app", "category": "sign-in", "expect": "warn", "why": "HTTP redirect to /login."},
+  {"name": "js-login-redirect", "path": "/js-redirect", "category": "sign-in", "expect": "warn", "why": "A JS redirect to /login after load."},
+
+  {"name": "http-404", "path": "/status?code=404", "category": "errors", "expect": "warn", "why": "A 404 must not be reported as a plain success."},
+  {"name": "http-500", "path": "/status?code=500", "category": "errors", "expect": "warn", "why": "A server error page."},
+  {"name": "http-403", "path": "/status?code=403", "category": "errors", "expect": "warn", "why": "Forbidden."},
+  {"name": "notfound-200", "path": "/notfound200", "category": "errors", "expect": "warn", "why": "A 'Page not found' page served with HTTP 200."},
+  {"name": "challenge-403", "path": "/challenge?code=403", "category": "bot-challenge", "expect": "warn", "why": "A Cloudflare-style 'Just a moment...' interstitial."},
+  {"name": "challenge-503", "path": "/challenge?code=503", "category": "bot-challenge", "expect": "warn", "why": "Challenge served as 503."},
+  {"name": "challenge-200", "path": "/challenge?code=200", "category": "bot-challenge", "expect": "warn", "why": "Challenge served as 200."},
+  {"name": "blank", "path": "/blank", "category": "blank", "expect": "warn", "why": "An empty page."},
+  {"name": "blank-js", "path": "/blank-js", "category": "blank", "expect": "warn", "why": "The app's script crashed and nothing rendered."},
+  {"name": "white-on-white", "path": "/white", "category": "blank", "expect": "warn", "why": "The DOM has text, but the image is blank."},
+
+  {"name": "live-mymind", "url": "https://access.mymind.com/", "category": "live", "expect": "warn", "why": "Signed out: a JS-rendered sign-in screen. Iris returned a blank image as ok on 2026-11-23."},
+  {"name": "live-example", "url": "https://example.com/", "category": "live", "expect": "content", "why": "A trivial live page."},
+  {"name": "live-wikipedia", "url": "https://en.wikipedia.org/wiki/Lighthouse", "category": "live", "full": true, "expect": "content", "why": "A tall live page with many images."},
+  {"name": "live-hn", "url": "https://news.ycombinator.com/", "category": "live", "expect": "content", "why": "A dense text page."},
+  {"name": "live-github-404", "url": "https://github.com/ashishra0/this-repo-does-not-exist", "category": "live", "expect": "warn", "why": "A real 404."},
+  {"name": "live-tailwind-dark", "url": "https://tailwindcss.com/", "category": "live", "dark": true, "full": true, "expect": "content", "why": "A heavy marketing page with animations, in dark mode."}
+]
