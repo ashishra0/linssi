@@ -23,6 +23,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/ashishra0/linssi"
 )
 
 //go:embed cases.json
@@ -74,13 +76,21 @@ type report struct {
 }
 
 func main() {
-	tools := flag.String("tools", "linssi,iris", "tools to run: linssi, iris")
+	tools := flag.String("tools", "linssi,iris", "tools to run: linssi, iris, playwright")
 	live := flag.Bool("live", false, "include live sites")
 	only := flag.String("only", "", "run cases whose name matches this regexp")
 	out := flag.String("out", filepath.Join(os.TempDir(), "linssi-bench"), "directory for images and results.json")
-	chrome := flag.String("chrome", os.Getenv("CHROME"), "browser binary passed to every tool")
+	chrome := flag.String("chrome", os.Getenv("CHROME"), "browser binary passed to every tool (default: $CHROME, else the one Linssi finds)")
 	irisBin := flag.String("iris", "iris", "iris binary")
 	flag.Parse()
+	// Every tool gets the same explicit browser; left alone, each would pick its own.
+	if *chrome == "" {
+		*chrome = linssi.FindChrome()
+	}
+	if *chrome == "" {
+		fatal(errors.New("no browser found: pass -chrome or set $CHROME"))
+	}
+	fmt.Fprintln(os.Stderr, "browser:", *chrome)
 
 	var cases []Case
 	if err := json.Unmarshal(casesJSON, &cases); err != nil {
@@ -128,40 +138,19 @@ func capture(tool, bin, chrome, u string, c Case, file string) Result {
 	r := Result{Tool: tool, Case: c.Name, Category: c.Category, Expect: c.Expect}
 	os.MkdirAll(filepath.Dir(file), 0o755)
 	os.Remove(file)
-	args := []string{"--json", "--timeout", "30", "-o", file}
-	if chrome != "" {
-		args = append(args, "--chrome", chrome)
-	}
-	if c.Full {
-		args = append(args, "--full")
-	}
-	if c.Dark {
-		args = append(args, "--dark")
-	}
-	if c.Size != "" {
-		args = append(args, "--size", c.Size)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	start := time.Now()
-	stdout, err := exec.CommandContext(ctx, bin, append(args, u)...).Output()
-	r.ElapsedMS = time.Since(start).Milliseconds()
-
-	var rep report
-	if jerr := json.Unmarshal(lastLine(stdout), &rep); jerr != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			r.Error = strings.TrimSpace(string(ee.Stderr))
-		} else {
-			r.Error = fmt.Sprint(err, jerr)
-		}
-		r.Status, r.Grade = "crashed", failed // no report at all: a harness or tool crash, never a pass
+	run := runCLI
+	if tool == "playwright" {
+		run = runPlaywright
+	}
+	rep, ms, err := run(ctx, bin, chrome, u, c, file)
+	r.ElapsedMS = ms
+	if err != nil {
+		r.Error, r.Status, r.Grade = err.Error(), "crashed", failed // no report at all: a harness or tool crash, never a pass
 		return r
 	}
-	r.Status, r.Warnings = rep.Status, rep.Warnings
-	if rep.Error != "" {
-		r.Error = rep.Error
-	}
+	r.Status, r.Warnings, r.Error = rep.Status, rep.Warnings, rep.Error
 	r.Files = rep.Files
 	if len(r.Files) == 0 && rep.Status == "ok" {
 		r.Files = []string{rep.Output}
@@ -175,6 +164,33 @@ func capture(tool, bin, chrome, u string, c Case, file string) Result {
 	}
 	r.Grade = grade(c, r)
 	return r
+}
+
+// runCLI runs Linssi or Iris, which share flags and the --json report.
+func runCLI(ctx context.Context, bin, chrome, u string, c Case, file string) (report, int64, error) {
+	args := []string{"--json", "--timeout", "30", "-o", file}
+	args = append(args, "--chrome", chrome)
+	if c.Full {
+		args = append(args, "--full")
+	}
+	if c.Dark {
+		args = append(args, "--dark")
+	}
+	if c.Size != "" {
+		args = append(args, "--size", c.Size)
+	}
+	start := time.Now()
+	stdout, err := exec.CommandContext(ctx, bin, append(args, u)...).Output()
+	ms := time.Since(start).Milliseconds()
+	var rep report
+	if jerr := json.Unmarshal(lastLine(stdout), &rep); jerr != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return rep, ms, errors.New(strings.TrimSpace(string(ee.Stderr)))
+		}
+		return rep, ms, fmt.Errorf("%v %v", err, jerr)
+	}
+	return rep, ms, nil
 }
 
 func grade(c Case, r Result) string {
@@ -237,7 +253,6 @@ func inspect(file string) (marker, blank bool) {
 	}
 	return hits >= 10_000, total > 0 && float64(top)/float64(total) >= 0.985
 }
-
 
 func summarize(w *os.File, tools []string, results []Result) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
