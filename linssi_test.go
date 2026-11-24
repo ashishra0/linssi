@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/jpeg"
 	"image/png"
 	"math"
@@ -248,6 +249,13 @@ func site() *httptest.Server {
 	mux.HandleFunc("/nometa", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<style>body{margin:0}div{width:980px;height:100px;background:linear-gradient(90deg,#f00 0 50%,#00f 50% 100%)}</style><div></div>`)
 	})
+	// Content a short timer adds after load, with nothing else pending.
+	mux.HandleFunc("/later", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<h1>Home</h1><script>setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<p>Report ready</p>') || (document.title = 'ready'), 900)</script>`)
+	})
+	mux.HandleFunc("/oops", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<title>Page not found</title><h1>404</h1>`)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -440,5 +448,58 @@ func TestBrowserElementCapture(t *testing.T) {
 		if _, err := cam.Capture(ctx, srv.URL+"/box", o); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("selector %q: got %v, want %q", sel, err, want)
 		}
+	}
+}
+
+func TestNoInk(t *testing.T) {
+	enc := func(draw func(*image.RGBA)) []byte {
+		img := image.NewRGBA(image.Rect(0, 0, 1200, 800))
+		for i := range img.Pix {
+			img.Pix[i] = 255
+		}
+		draw(img)
+		var b bytes.Buffer
+		png.Encode(&b, img)
+		return b.Bytes()
+	}
+	flat := enc(func(*image.RGBA) {})
+	// One short line of text: a 60x10 block of dark pixels.
+	word := enc(func(img *image.RGBA) {
+		for y := 40; y < 50; y++ {
+			for x := 40; x < 100; x++ {
+				img.Set(x, y, color.Black)
+			}
+		}
+	})
+	if !noInk([][]byte{flat}) || noInk([][]byte{word}) || noInk([][]byte{flat, word}) || noInk(nil) {
+		t.Fatal("noInk misjudged flat vs. one word")
+	}
+}
+
+func TestBrowserLateContentAndExpectText(t *testing.T) {
+	cam := camera(t)
+	srv := site()
+	defer func() { srv.CloseClientConnections(); srv.Close() }()
+	ctx := context.Background()
+	has := func(c *Capture, s string) bool { return strings.Contains(strings.Join(c.Page.Warnings, "\n"), s) }
+
+	// A short timer pending after load is waited for, with no other signal.
+	o := opts("viewport")
+	if shot, err := cam.Capture(ctx, srv.URL+"/later", o); err != nil || shot.Page.Title != "ready" {
+		t.Fatalf("late content: captured before the timer fired (%v)", err)
+	}
+	o.ExpectText = "report  READY"
+	if _, err := cam.Capture(ctx, srv.URL+"/later", o); err != nil {
+		t.Fatalf("expect-text on late content: %v", err)
+	}
+	o.ExpectText = "never here"
+	o.Timeout = 4 * time.Second
+	if _, err := cam.Capture(ctx, srv.URL+"/later", o); err == nil || !strings.Contains(err.Error(), "never appeared") {
+		t.Fatalf("missing text should fail the capture, got %v", err)
+	}
+	// An error page served with 200 is flagged.
+	shot, err := cam.Capture(ctx, srv.URL+"/oops", opts("viewport"))
+	if err != nil || !has(shot, "error page") {
+		t.Fatalf("200 error page: %v %v", err, shot.Page.Warnings)
 	}
 }

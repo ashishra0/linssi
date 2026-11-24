@@ -41,21 +41,24 @@ type Viewport struct {
 
 // Options describe one capture.
 type Options struct {
-	Viewport  Viewport
-	Mode      string // "viewport", "full_page" or "element"
-	Selector  string
-	Padding   int
-	Dark      bool
-	Wait      time.Duration
-	WaitFor   string
-	Timeout   time.Duration
-	Format    string // "png", "jpeg" or "webp"
-	MaxPixels int64  // per image; 0 means no budget
-	Freeze    bool
-	Hide      []string
-	Mask      []string
-	Headers   map[string]string
-	Storage   *StorageState
+	Viewport Viewport
+	Mode     string // "viewport", "full_page" or "element"
+	Selector string
+	Padding  int
+	Dark     bool
+	Wait     time.Duration
+	WaitFor  string
+	// ExpectText fails the capture unless this text (case-insensitive) shows
+	// on the page within the timeout.
+	ExpectText string
+	Timeout    time.Duration
+	Format     string // "png", "jpeg" or "webp"
+	MaxPixels  int64  // per image; 0 means no budget
+	Freeze     bool
+	Hide       []string
+	Mask       []string
+	Headers    map[string]string
+	Storage    *StorageState
 }
 
 // PageInfo is what the page looked like when the shutter fired.
@@ -323,6 +326,14 @@ func (c *Camera) shoot(ctx context.Context, rawURL string, o Options, started ti
 	} else if p.AuthWall && !isLoginURL(rawURL) {
 		warnings = append(warnings, "page shows a sign-in or sign-up screen, not signed-in content; pass storage_state or headers, or connect to a logged-in browser")
 	}
+	if p.Challenge {
+		warnings = append(warnings, fmt.Sprintf("page is a bot check (%q), not the site; the site blocked the headless browser", p.Title))
+	} else if p.ErrorPage && (p.Status == nil || *p.Status < 400) {
+		warnings = append(warnings, fmt.Sprintf("page looks like an error page (%q) though it returned a success status", p.Title))
+	}
+	if p.Overlay {
+		warnings = append(warnings, "a dialog or cookie wall covers the page; dismiss it first, or pass hide with its selector")
+	}
 	if p.Blank {
 		warnings = append(warnings, "page looks blank: no text or media rendered")
 	}
@@ -333,7 +344,16 @@ func (c *Camera) shoot(ctx context.Context, rawURL string, o Options, started ti
 		warnings = append(warnings, "animations still running after 3s; try freeze")
 	}
 	if !settled.Quiet && !o.Freeze {
-		warnings = append(warnings, "page content was still changing after 2s")
+		warnings = append(warnings, "page content was still changing when captured")
+	}
+	if settled.Fetches > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d data request(s) still loading after 5s; content may be missing", settled.Fetches))
+	}
+	if settled.Loaders > 0 {
+		warnings = append(warnings, "a loading indicator (spinner, skeleton or progress bar) is still on screen")
+	}
+	if settled.Endless {
+		warnings = append(warnings, "page kept growing while scrolling (an endless feed?); captured what loaded in 5s")
 	}
 
 	// A phone shows a page without a viewport meta zoomed out to its layout
@@ -394,6 +414,10 @@ func (c *Camera) shoot(ctx context.Context, rawURL string, o Options, started ti
 			return nil, fmt.Errorf("screenshot: %w", err)
 		}
 		images = append(images, res.Data)
+	}
+
+	if !p.Blank && o.Mode != "element" && noInk(images) {
+		warnings = append(warnings, "image is one flat color: nothing visible rendered (text the same color as the background, or content not painted yet)")
 	}
 
 	return &Capture{
@@ -467,6 +491,16 @@ func (c *Camera) settle(ctx context.Context, o Options, started time.Time) (sett
 	if err != nil {
 		return settled, err
 	}
+	endless := false
+	if o.ExpectText != "" {
+		if _, err := eval[any](ctx, expectTextJS(o.ExpectText, budget())); err != nil {
+			return settled, err
+		}
+		// The text arrived; let what came with it finish too.
+		if settled, err = eval[settleResult](ctx, fmt.Sprintf("(%s)(false)", settleJS)); err != nil {
+			return settled, err
+		}
+	}
 	if o.WaitFor != "" {
 		if _, err := eval[any](ctx, waitForJS(o.WaitFor, budget(), false)); err != nil {
 			return settled, err
@@ -474,7 +508,7 @@ func (c *Camera) settle(ctx context.Context, o Options, started time.Time) (sett
 	}
 	switch o.Mode {
 	case "full_page":
-		if _, err := eval[any](ctx, scrollJS); err != nil {
+		if endless, err = eval[bool](ctx, scrollJS); err != nil {
 			return settled, err
 		}
 	case "element":
@@ -501,6 +535,7 @@ func (c *Camera) settle(ctx context.Context, o Options, started time.Time) (sett
 			return settled, err
 		}
 	}
+	settled.Endless = endless
 	return settled, nil
 }
 
@@ -665,6 +700,9 @@ type settleResult struct {
 	Images     int  `json:"images"`
 	Animations bool `json:"animations"`
 	Quiet      bool `json:"quiet"`
+	Fetches    int  `json:"fetches"`
+	Loaders    int  `json:"loaders"`
+	Endless    bool `json:"-"`
 }
 
 type probeResult struct {
@@ -673,6 +711,9 @@ type probeResult struct {
 	Title       string  `json:"title"`
 	Blank       bool    `json:"blank"`
 	AuthWall    bool    `json:"authWall"`
+	ErrorPage   bool    `json:"errorPage"`
+	Challenge   bool    `json:"challenge"`
+	Overlay     bool    `json:"overlay"`
 	ScrollX     float64 `json:"scrollX"`
 	ScrollY     float64 `json:"scrollY"`
 	DocHeight   float64 `json:"docHeight"`

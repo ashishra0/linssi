@@ -68,6 +68,7 @@ Flags:
       --format FMT           png, jpg or webp (an --out extension wins; default png)
       --wait MS              extra delay after smart waiting
       --wait-for CSS         wait until a selector exists
+      --expect-text TEXT     fail unless this text shows on the page (waits for it)
       --scale N              device scale factor (overrides the size preset)
       --max-pixels N         max output pixels per image; tall full pages split into tiles
       --freeze               finish entrance animations; pause loops, videos and the caret
@@ -117,6 +118,7 @@ type cliArgs struct {
 	format     string
 	wait       int
 	waitFor    string
+	expectText string
 	scale      float64
 	jobs       int
 	timeout    int
@@ -146,6 +148,7 @@ func parseArgs(args []string, stderr io.Writer) (*cliArgs, error) {
 	fs.StringVar(&a.format, "format", "", "png, jpg or webp (an --out extension wins) (default png)")
 	fs.IntVar(&a.wait, "wait", 0, "extra settle delay in ms after smart waiting")
 	fs.StringVar(&a.waitFor, "wait-for", "", "wait until this CSS selector exists")
+	fs.StringVar(&a.expectText, "expect-text", "", "fail unless this text shows on the page")
 	fs.Float64Var(&a.scale, "scale", 0, "device scale factor (overrides the preset)")
 	fs.IntVar(&a.jobs, "jobs", 0, "concurrent captures (default min(4, URLs))")
 	fs.IntVar(&a.timeout, "timeout", 30, "per-page budget in seconds")
@@ -306,7 +309,7 @@ func run(ctx context.Context, a *cliArgs) (int, error) {
 	}
 	opts := linssi.Options{
 		Viewport: vp, Mode: "viewport", Selector: a.selector, Padding: a.padding, Dark: a.dark,
-		Wait: time.Duration(a.wait) * time.Millisecond, WaitFor: a.waitFor,
+		Wait: time.Duration(a.wait) * time.Millisecond, WaitFor: a.waitFor, ExpectText: a.expectText,
 		Timeout: time.Duration(max(a.timeout, 1)) * time.Second, Format: format,
 		MaxPixels: a.maxPixels, Freeze: a.freeze, Hide: a.hide, Mask: a.mask, Headers: a.headers,
 	}

@@ -53,11 +53,11 @@ func fixtures() http.Handler {
 		case "/late":
 			html(content("", fmt.Sprintf(`<p>Welcome back.</p><script>setTimeout(()=>{const d=document.createElement('div');d.id='marker';document.querySelector('main').append(d)},%d)</script>`, ms)))
 		case "/spa":
-			html(page("App", `.spin{width:40px;height:40px;border:4px solid #ccc;border-top-color:#333;border-radius:50%;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(1turn)}}`,
-				header+fmt.Sprintf(`<main id="root"><div class="spin"></div></main><script>fetch('/api?ms=%d').then(r=>r.json()).then(()=>{document.getElementById('root').innerHTML='<div id="marker"></div>'})</script>`, ms)))
+			html(page("App", `.spinner{width:40px;height:40px;border:4px solid #ccc;border-top-color:#333;border-radius:50%;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(1turn)}}`,
+				header+fmt.Sprintf(`<main id="root"><div class="spinner"></div></main><script>fetch('/api?ms=%d').then(r=>r.json()).then(()=>{document.getElementById('root').innerHTML='<div id="marker"></div>'})</script>`, ms)))
 		case "/skeleton":
-			html(page("App", `.sk{height:24px;margin:12px 0;border-radius:6px;background:linear-gradient(90deg,#eee,#ddd,#eee);background-size:200%;animation:sh 1.2s linear infinite}@keyframes sh{to{background-position:-200% 0}}`,
-				header+fmt.Sprintf(`<main id="root"><div class="sk"></div><div class="sk"></div><div class="sk" style="width:60%%"></div></main><script>setTimeout(()=>{document.getElementById('root').innerHTML='<div id="marker"></div>'},%d)</script>`, ms)))
+			html(page("App", `.skeleton{height:24px;margin:12px 0;border-radius:6px;background:linear-gradient(90deg,#eee,#ddd,#eee);background-size:200%;animation:sh 1.2s linear infinite}@keyframes sh{to{background-position:-200% 0}}`,
+				header+fmt.Sprintf(`<main id="root"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton" style="width:60%%"></div></main><script>setTimeout(()=>{document.getElementById('root').innerHTML='<div id="marker"></div>'},%d)</script>`, ms)))
 		case "/hydrate":
 			html(content(`.pending #marker{visibility:hidden}`, fmt.Sprintf(`<div id="marker"></div><script>document.body.classList.add('pending');setTimeout(()=>document.body.classList.remove('pending'),%d)</script>`, ms)))
 		case "/img":

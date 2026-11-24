@@ -79,15 +79,21 @@ MCP captures default to 1.15 MP per image, about what Claude keeps before it dow
 
 ## Warnings
 
+Before the shutter fires, Linssi waits for the page to finish its own work: short timers set while it starts, fetch and XHR requests, spinners and skeletons on screen, fonts, nearby images and entrance animations, each with a cap. `--expect-text TEXT` (MCP: `expect_text`) goes further: the capture waits for that text and fails if it never shows.
+
 The JSON report (`--json`) and every MCP result carry the final URL, HTTP status and title. The normal CLI output prints the warnings, and the final URL when the page redirected. Warnings cover:
 
 - HTTP 4xx and 5xx
 - a redirect to what looks like a login page
 - a sign-in or sign-up screen shown in place, with no redirect: a password field, a "Sign in with…" or "Continue with…" button, or the Apple or Google sign-in button on the first screen
-- a blank page
+- an error page served with a success status ("Page not found" in the title or main heading)
+- a bot check in place of the site (Cloudflare's "Just a moment…" and similar)
+- a dialog or cookie wall covering the page
+- a blank page, or an image that came out one flat color
 - up to five console errors
 - a request that never finished (captured anyway after 5 s)
-- the page still changing, images still loading, or animations still running after the settle limits
+- the page still changing, data requests or a loading indicator (spinner, skeleton) still there, images still loading, or animations still running after the settle limits
+- an endless feed on a full-page capture (scrolling stops after 5 s)
 - downscaling below 0.75x (small text may be hard to read)
 - truncation past 8 tiles
 
@@ -114,6 +120,7 @@ Known gaps, and room to improve:
 - **Signing in takes a separate browser.** Chrome 136 and later won't let tools drive your everyday profile, so you sign in once more in Linssi's browser. Google sign-in may refuse a browser that is being remote-controlled; signing in with email, or exporting a session, works around it.
 - **Session export saves cookies only.** Apps that keep their login in localStorage still need `--connect`.
 - **Sign-in detection is a heuristic.** It catches login redirects, password fields, "Sign in with…" or "Continue with…" buttons, and the Apple and Google sign-in buttons. A marketing page with a "Sign up with Google" button gets a false warning, and a sign-in screen built some other way can slip through.
+- **Other page checks are heuristics too.** Loading indicators are found by name (`spinner`, `skeleton`, `shimmer`, `loader` in a class, `aria-busy`, `role="progressbar"`); one named some other way isn't waited for. Error pages and bot checks are recognized by their title, heading or known markers. Content that arrives later than 5 s with no request or indicator pending is missed; use `--expect-text` when you know what should be there.
 - **Infinite feeds.** A full-page capture scrolls once so lazy content loads, but it doesn't keep loading an endless feed. You get what has loaded.
 - **Speed depends on the site.** A local app captures in under a second. Real sites with fonts, images and trackers take 1–4 s.
 - **Platforms.** The install script covers macOS and Linux; Windows uses the release binary or `go install`. `linssi browser --install` has no Chrome for Testing build for Linux on ARM, so pass `--chrome` there.

@@ -35,6 +35,7 @@ type CaptureInput struct {
 	Format           string            `json:"format,omitempty" jsonschema:"png (default), jpg or webp; an output extension wins"`
 	WaitMS           int               `json:"wait_ms,omitempty" jsonschema:"extra settle delay in ms after smart waiting"`
 	WaitFor          string            `json:"wait_for,omitempty" jsonschema:"wait until this CSS selector exists before capturing"`
+	ExpectText       string            `json:"expect_text,omitempty" jsonschema:"fail the capture unless this text (case-insensitive) shows on the page; waits for it, up to the timeout"`
 	Scale            float64           `json:"scale,omitempty" jsonschema:"device scale factor overriding the viewport preset"`
 	TimeoutSeconds   int               `json:"timeout_seconds,omitempty" jsonschema:"per-page timeout in seconds (default 30)"`
 	Output           string            `json:"output,omitempty" jsonschema:"optional file path to also write; tiled captures write NAME-1.ext, NAME-2.ext, ..."`
@@ -92,7 +93,8 @@ func (in CaptureInput) Prepare() (string, linssi.Options, error) {
 	o := linssi.Options{
 		Viewport: vp, Mode: "viewport", Dark: in.Dark, Format: format,
 		Wait: time.Duration(in.WaitMS) * time.Millisecond, WaitFor: strings.TrimSpace(in.WaitFor),
-		Timeout: time.Duration(timeout) * time.Second, MaxPixels: maxPixels,
+		ExpectText: strings.TrimSpace(in.ExpectText),
+		Timeout:    time.Duration(timeout) * time.Second, MaxPixels: maxPixels,
 		Freeze: in.FreezeAnimations, Hide: in.Hide, Mask: in.Mask, Headers: in.Headers,
 	}
 	switch {
