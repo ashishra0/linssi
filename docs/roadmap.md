@@ -1,5 +1,39 @@
 # Linssi roadmap: the next four weeks
 
+## Progress
+
+Last updated 2026-11-27, on branch `open-source-hardening`.
+
+| Week | State | Commits |
+|---|---|---|
+| 1. Reliability benchmark | Done | 4f07e49, d7ca4e0 |
+| 2. Close the silent-failure gaps | Done | 1f21203 |
+| 3. `linssi login` | Next | |
+| 4. Publish | Not started | |
+
+**Benchmark results** (`go run ./bench -tools linssi,iris,playwright -live`): 53 cases (47 local fixtures, 6 live sites), every tool on the same Chrome for Testing.
+
+| Tool | Silent failures, before Week 2 | Silent failures, now | Notes |
+|---|---|---|---|
+| Linssi | 11 (20.8%) | **0 (0%)** | 2 false alarms left, both fair: a request that never finishes, an endless feed |
+| Iris 0.4.1 | 30 (56.6%) | 30 | Misses every sign-in, error, blank and bot-check page; the 20,000 px page wraps back to the top past 16,384 rows; mymind comes back blank as `ok` |
+| Playwright MCP 0.0.85 | 38 (71.7%) | 38 | Screenshots right after load, so it catches fades mid-way; doesn't scroll for lazy content; never warns |
+
+A warm Linssi capture of a plain local page takes about 0.7 s.
+
+**What Week 2 changed in Linssi:**
+
+- Settling waits for the page's own work instead of fixed limits: short timers set while it starts, fetch and XHR in flight, and visible loading indicators (at most 5 s). JS animation frames delay the shot but don't count as the page changing. Hidden images aren't waited on.
+- New warnings: error pages served with HTTP 200, bot checks, a dialog or cookie wall over the page, an image of one flat color, data requests or a loading indicator still there, endless feeds (scrolling stops after 5 s).
+- `--expect-text TEXT` (MCP `expect_text`): the capture waits for the text and fails if it never shows.
+
+**Open items:**
+
+- Once, a live capture (a GitHub 404 page) ran past Linssi's own 30 s timeout. It didn't happen again. Suspects: opening the tab, or `Launch` asking the browser for its version, since neither has a deadline.
+- A test failed once when both test packages ran at the same time. It didn't fail in 3 runs under `-race`, and it's unknown which test it was.
+- Loading indicators are found by class name (`spinner`, `skeleton`, `shimmer`, `loader`) and ARIA attributes, so one named differently isn't waited for. Listed in README Limitations.
+- The Buy Me a Coffee URL is still needed for Week 4.
+
 ## Goal
 
 Make Linssi the default way agents see a page, by being the screenshot tool whose captures can be trusted: a capture is either right, or it says why it isn't.
@@ -37,7 +71,7 @@ The benchmark is the core of the plan: it's the test suite, the roadmap and the 
 4. Detect silent failures with automatic checks: near-blank images, the expected text present or absent, size. Fall back to a manual label only where needed.
 5. Print a table and write JSON results, then run it nightly in CI.
 
-**Done when** one command prints the silent failure rate per tool, and the mymind blank-page case is in the corpus.
+**Done when** one command prints the silent failure rate per tool, and the mymind blank-page case is in the corpus. ✅ Done.
 
 ## Week 2: close the silent-failure gaps
 
@@ -50,7 +84,7 @@ Fix what the benchmark finds. Likely first fixes:
 5. **`--expect-text TEXT`** (and the same MCP option): the capture fails loudly when the text isn't on the page.
 6. Fix the timing-sensitive test that failed once when both test packages ran at the same time.
 
-**Done when** Linssi's silent failure rate on the benchmark is under 1%, and a typical warm capture takes under 1 s on local fixtures.
+**Done when** Linssi's silent failure rate on the benchmark is under 1%, and a typical warm capture takes under 1 s on local fixtures. ✅ Done: 0 of 53, about 0.7 s.
 
 ## Week 3: `linssi login`
 
